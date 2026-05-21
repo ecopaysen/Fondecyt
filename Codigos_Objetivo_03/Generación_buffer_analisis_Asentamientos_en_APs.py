@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
 SCRIPT ULTRA-RÁPIDO PARA 97 APs
-BUFFERS ACUMULATIVOS (desde borde AP hacia afuera)
+GENERACIÓN DE BUFFERS ACUMULATIVOS (desde borde AP hacia afuera)
 - AP_ant = Solo AP original
 - 1km_ant = % desde borde AP hasta 1km (anillo 1km, SIN AP)
 - 2km_ant = % desde borde AP hasta 2km (anillo 1km + 2km, SIN AP)
 - 3km_ant = % desde borde AP hasta 3km (anillo 1km + 2km + 3km, SIN AP)
+- etc.
 
 CÁLCULO:
 - ant = SOLO píxeles valor 1
@@ -183,7 +184,7 @@ for row in cursor:
         print(f"  📍 AP (solo): ❌ ERROR")
     
     # ======================================================
-    # BUFFERS ACUMULATIVOS (restando AP - desde borde hacia afuera)
+    # GENERACIÓN DE BUFFERS ACUMULATIVOS (restando AP - desde borde hacia afuera)
     # ======================================================
     for km in distancias_km:
         # Buffer de km km MENOS la AP = desde borde AP hasta km km
