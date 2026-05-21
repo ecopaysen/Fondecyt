@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """
-SCRIPT ULTRA-RÁPIDO PARA 97 APs
-GENERACIÓN DE BUFFERS ACUMULATIVOS (desde borde AP hacia afuera)
+SCRIPT  PARA ANALISIS DE DATOS ASENTAMIENTOS Y GENERACION/EXPORTACIÓN DE BUFFERS 97 APs
+GENERACION DE BUFFERS ACUMULATIVOS (desde borde AP hacia afuera)
 - AP_ant = Solo AP original
 - 1km_ant = % desde borde AP hasta 1km (anillo 1km, SIN AP)
 - 2km_ant = % desde borde AP hasta 2km (anillo 1km + 2km, SIN AP)
 - 3km_ant = % desde borde AP hasta 3km (anillo 1km + 2km + 3km, SIN AP)
-- etc.
 
-CÁLCULO:
+CÁLCULO DE DATOS DE:
 - ant = SOLO píxeles valor 1
 - otros = SOLO píxeles valor 0
 - nodata (2) = se calcula pero NO se incluye en porcentajes
+
+OPCIÓN: Exportar shapefiles de buffers (cambiar EXPORTAR_BUFFERS = True)
 """
 
 import arcpy
@@ -35,14 +36,25 @@ ruta_img = r"C:\Users\valen\Desktop\Fondecyt\settlements\Asentamientos_raster_Ch
 
 ruta_csv_salida = r"C:\Users\valen\Desktop\Fondecyt\settlements\CSV\csv_anillos\resultados_anillos.csv"
 
+# ====== OPCIÓN: EXPORTAR SHAPEFILES DE BUFFERS ======
+# Cambiar a True si quieres exportar los shapefiles
+EXPORTAR_BUFFERS = False  # ← CAMBIAR A True PARA EXPORTAR
+ruta_buffers = r"C:\Users\valen\Desktop\Fondecyt\settlements\CSV\csv_anillos\BUFFERS_SHAPEFILES"
+# ====================================================
+
 distancias_km = list(range(1, 11))
 
 os.makedirs(os.path.dirname(ruta_csv_salida), exist_ok=True)
+
+if EXPORTAR_BUFFERS:
+    os.makedirs(ruta_buffers, exist_ok=True)
 
 print("\n📁 CONFIGURACIÓN:")
 print(f"  AP: {ruta_ap}")
 print(f"  Imagen: {ruta_img}")
 print(f"  CSV salida: {ruta_csv_salida}")
+if EXPORTAR_BUFFERS:
+    print(f"  Buffers shapefiles: {ruta_buffers}")
 
 # ======================================================
 # VERIFICAR
@@ -184,7 +196,26 @@ for row in cursor:
         print(f"  📍 AP (solo): ❌ ERROR")
     
     # ======================================================
-    # GENERACIÓN DE BUFFERS ACUMULATIVOS (restando AP - desde borde hacia afuera)
+    # EXPORTAR SHAPEFILES DE BUFFERS (OPCIONAL)
+    # ======================================================
+    if EXPORTAR_BUFFERS:
+        # Crear carpeta para esta AP
+        carpeta_ap = os.path.join(ruta_buffers, f"AP_{idx:03d}_{nombre_ap.replace(' ', '_')}")
+        os.makedirs(carpeta_ap, exist_ok=True)
+        
+        # Exportar AP original
+        try:
+            fc_ap = os.path.join(carpeta_ap, "AP_original.shp")
+            arcpy.management.CreateFeatureclass(
+                carpeta_ap, "AP_original", geometry_type="POLYGON"
+            )
+            with arcpy.da.InsertCursor(fc_ap, ['SHAPE@']) as cursor_insert:
+                cursor_insert.insertRow([geometry])
+        except:
+            pass
+    
+    # ======================================================
+    # BUFFERS ACUMULATIVOS (restando AP - desde borde hacia afuera)
     # ======================================================
     for km in distancias_km:
         # Buffer de km km MENOS la AP = desde borde AP hasta km km
@@ -203,6 +234,18 @@ for row in cursor:
             print(f"  📍 Buffer {km}km: ant={pct_ant}% | otros={pct_otros}%")
         else:
             print(f"  📍 Buffer {km}km: ❌ ERROR")
+        
+        # Exportar shapefile del buffer si está habilitado
+        if EXPORTAR_BUFFERS:
+            try:
+                fc_buffer = os.path.join(carpeta_ap, f"Buffer_{km}km.shp")
+                arcpy.management.CreateFeatureclass(
+                    carpeta_ap, f"Buffer_{km}km", geometry_type="POLYGON"
+                )
+                with arcpy.da.InsertCursor(fc_buffer, ['SHAPE@']) as cursor_insert:
+                    cursor_insert.insertRow([buffer_sin_ap])
+            except:
+                pass
     
     resultados_lista.append(fila)
     
@@ -265,6 +308,10 @@ print(f"  AP con datos: {con_datos}/{len(resultados_lista)}")
 print(f"  Tiempo total: {tiempo_total} minutos")
 print(f"  Tiempo promedio por AP: {round(tiempo_total*60/len(resultados_lista), 1)} segundos")
 print(f"  Cálculo: ant=solo 1 | otros=solo 0 | nodata(2)=no incluido")
+if EXPORTAR_BUFFERS:
+    print(f"  Buffers exportados: SÍ")
+else:
+    print(f"  Buffers exportados: NO (cambiar EXPORTAR_BUFFERS = True)")
 print()
 
 valores_ap_ant = [r['AP_ant'] for r in resultados_lista if r['AP_ant'] is not None]
@@ -280,5 +327,9 @@ print("📋 PRIMERAS 5 APs PROCESADAS:")
 for i, row in enumerate(resultados_lista[:5]):
     print(f"  {i+1}. {row['NOMBRE_TOT']}")
     print(f"     AP_ant={row['AP_ant']}% | 1km_ant={row['1km_ant']}% | 10km_ant={row['10km_ant']}%")
+
+if EXPORTAR_BUFFERS:
+    print(f"\n📁 Shapefiles guardados en:")
+    print(f"   {ruta_buffers}")
 
 print("\n\n🎉 ¡PROCESAMIENTO COMPLETADO EN", tiempo_total, "MINUTOS!\n")
