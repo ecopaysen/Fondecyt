@@ -1,1 +1,17 @@
 # Carpeta para códigos del Objetivo 01
+
+## FONDECYT No. 1251080
+
+**Evaluación de las áreas protegidas y sus zonas de amortiguación en Chile: un análisis geoespacial de su eficacia para contrarrestar el cambio global**
+
+### Descripción
+
+En esta carpeta se guardan todos los códigos Python desarrollados y utilizados en el **Objetivo 01** del proyecto FONDECYT No. 1251080.
+
+Estos scripts contienen la lógica computacional necesaria para realizar análisis geoespaciales, procesamiento de datos de áreas protegidas, evaluación de zonas de amortiguación y modelamiento de variables asociadas al cambio global en Chile.
+
+### Contenido esperado
+- Scripts de procesamiento de datos geoespaciales
+- Análisis de áreas protegidas y sus zonas de amortiguación
+- Evaluación de eficacia de protección
+- Modelamiento de impacto del cambio global
