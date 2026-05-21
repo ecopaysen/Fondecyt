@@ -1,10 +1,10 @@
 # =========================================================
-# SCRIPT DE CORRECCIÓN DE MAPAS DE COBERTURA (MapBiomas)
+# SCRIPT DE CORRECCIÓN DE MAPAS RASTER DE COBERTURA (MapBiomas)
 # Corrección selectiva de píxeles dentro de polígonos
 # ArcGIS Pro - Python Integration
 # =========================================================
-# Autor: [Tu nombre]
-# Fecha: [Fecha de ejecución]
+# Autor: Valentina Contreras 
+# Fecha: Enero 2026
 # Propósito: Cambiar valores específicos de rasters solo dentro de áreas
 #           definidas por polígonos (shapefiles), sin afectar píxeles externos
 # =========================================================
