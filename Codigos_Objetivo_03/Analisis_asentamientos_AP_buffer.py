@@ -257,6 +257,11 @@ Para optimizar:
   - Procesar en lotes más pequeños si hay limitaciones
 
 ================================================================================
+
+#!/usr/bin/env python3
+"""
+SCRIPT ANÁLISIS DE ASENTAMIENTOS - BUFFERS PREEXISTENTES v3
+VERSIÓN MEJORADA CON SELECCIÓN POR LOCALIZACIÓN
 """
 
 import arcpy
@@ -267,7 +272,7 @@ from arcpy import sa
 import time
 
 print("\n" + "="*70)
-print("PROCESAMIENTO FONDECYT - 97 APs (BUFFERS PREEXISTENTES)")
+print("PROCESAMIENTO FONDECYT - 97 APs (BUFFERS PREEXISTENTES v3)")
 print("="*70)
 
 # ======================================================
@@ -276,9 +281,9 @@ print("="*70)
 
 ruta_ap = r"C:\Users\valen\Desktop\Fondecyt\areas_protegidas_totales_actualizadas-20251109T203707Z-1-001\AP_terrestres_actualizadas_26marz26\AP_terrestres_actualizadas_26marz26.shp"
 
-ruta_img = r"C:\Users\valen\Desktop\Fondecyt\settlements\Asentamientos_raster_Chile_clip\Asen_2017.tif"
+ruta_img = r"C:\Users\valen\Desktop\Fondecyt\settlements\Asentamientos_raster_Chile_clip\modificado\Asen_buf_2015_modificado.tif"
 
-ruta_csv_salida = r"C:\Users\valen\Desktop\Fondecyt\settlements\CSV\csv_anillos\resultados_buffer_2017.csv"
+ruta_csv_salida = r"C:\Users\valen\Desktop\Fondecyt\settlements\CSV\csv_anillos\resultados_buffer_2015.csv"
 
 # RUTAS DE BUFFERS PREEXISTENTES
 ruta_buffers_base = r"C:\Users\valen\Desktop\Fondecyt\areas_protegidas_totales_actualizadas-20251109T203707Z-1-001\Buffer\Buffer_consecutivos\Buffer_clip\Buffer_clip_modificacion_v6"
@@ -366,10 +371,6 @@ except:
 def calcular_porcentajes_numpy(raster_obj, geometry):
     """
     Calcula porcentajes usando NumPy directamente
-    ant = SOLO píxeles valor 1
-    otros = SOLO píxeles valor 0
-    nodata (2) = se calcula pero NO se incluye en porcentajes
-    Retorna: (pct_ant, pct_otros, count_ant, count_otros, count_nodata)
     """
     try:
         # Extraer raster a array NumPy (en memoria)
@@ -462,7 +463,6 @@ for row in cursor:
     
     # ======================================================
     # BUFFERS PREEXISTENTES
-    # (desde borde AP hacia afuera, acumulativos)
     # ======================================================
     
     print(f"  🔹 Procesando buffers preexistentes...")
@@ -470,27 +470,73 @@ for row in cursor:
     for km in distancias_km:
         ruta_buffer = buffers_disponibles[km]
         
-        # Seleccionar geometría del buffer que intersecta con el AP actual
         try:
-            # Crear una capa de selección temporal
-            where_clause = f"OBJECTID >= 0"  # Seleccionar todo
+            # Crear layer temporal del buffer
+            nombre_lyr = f"buffer_{km}_{idx}"
+            lyr_buffer = arcpy.management.MakeFeatureLayer(ruta_buffer, nombre_lyr)[0]
             
-            # Usar el buffer completo
-            pct_ant, pct_otros, cnt_ant, cnt_otros, cnt_nodata = calcular_porcentajes_numpy(
-                raster_obj, 
-                ruta_buffer  # El archivo shapefile actúa como geometría
+            # Seleccionar features que intersecten con el AP actual
+            arcpy.management.SelectLayerByLocation(
+                lyr_buffer,
+                "INTERSECT",
+                geometry,
+                selection_type="NEW_SELECTION"
             )
             
-            fila[f'{km}km_ant'] = pct_ant
-            fila[f'{km}km_otros'] = pct_otros
+            # Contar features seleccionadas
+            result = arcpy.management.GetCount(lyr_buffer)
+            count_seleccionados = int(result[0])
             
-            if pct_ant is not None:
-                print(f"     Buffer {km}km: ant={pct_ant}% | otros={pct_otros}%")
+            if count_seleccionados > 0:
+                # Crear geometría combinada de los features seleccionados
+                geometria_combinada = None
+                cursor_buffer = arcpy.da.SearchCursor(lyr_buffer, ['SHAPE@'])
+                
+                for row_buffer in cursor_buffer:
+                    geom_buffer = row_buffer[0]
+                    if geom_buffer is not None and geom_buffer.area > 0:
+                        if geometria_combinada is None:
+                            geometria_combinada = geom_buffer
+                        else:
+                            try:
+                                geometria_combinada = geometria_combinada.union(geom_buffer)
+                            except:
+                                # Si union falla, continuar con la actual
+                                pass
+                
+                del cursor_buffer
+                
+                if geometria_combinada is not None and geometria_combinada.area > 0:
+                    # Calcular porcentajes
+                    pct_ant, pct_otros, cnt_ant, cnt_otros, cnt_nodata = calcular_porcentajes_numpy(
+                        raster_obj, 
+                        geometria_combinada
+                    )
+                    
+                    fila[f'{km}km_ant'] = pct_ant
+                    fila[f'{km}km_otros'] = pct_otros
+                    
+                    if pct_ant is not None:
+                        print(f"     Buffer {km}km: ant={pct_ant}% | otros={pct_otros}%")
+                    else:
+                        print(f"     Buffer {km}km: ⚠️  sin datos")
+                else:
+                    print(f"     Buffer {km}km: ⚠️  área insuficiente")
+                    fila[f'{km}km_ant'] = None
+                    fila[f'{km}km_otros'] = None
             else:
-                print(f"     Buffer {km}km: ❌ ERROR")
+                print(f"     Buffer {km}km: ⚠️  sin intersección")
+                fila[f'{km}km_ant'] = None
+                fila[f'{km}km_otros'] = None
+            
+            # Limpiar
+            try:
+                arcpy.management.Delete(lyr_buffer)
+            except:
+                pass
                 
         except Exception as e:
-            print(f"     Buffer {km}km: ❌ ERROR - {str(e)}")
+            print(f"     Buffer {km}km: ❌ ERROR - {str(e)[:50]}")
             fila[f'{km}km_ant'] = None
             fila[f'{km}km_otros'] = None
     
@@ -554,8 +600,6 @@ print(f"  Total de AP procesadas: {len(resultados_lista)}")
 print(f"  AP con datos: {con_datos}/{len(resultados_lista)}")
 print(f"  Tiempo total: {tiempo_total} minutos")
 print(f"  Tiempo promedio por AP: {round(tiempo_total*60/len(resultados_lista), 1)} segundos")
-print(f"  Cálculo: ant=solo 1 | otros=solo 0 | nodata(2)=no incluido")
-print(f"  Buffers utilizados: PREEXISTENTES (no generados)")
 print()
 
 valores_ap_ant = [r['AP_ant'] for r in resultados_lista if r['AP_ant'] is not None]
@@ -570,6 +614,9 @@ if valores_ap_ant:
 print("📌 PRIMERAS 5 APs PROCESADAS:")
 for i, row in enumerate(resultados_lista[:5]):
     print(f"  {i+1}. {row['NOMBRE_TOT']}")
-    print(f"     AP_ant={row['AP_ant']}% | 1km_ant={row['1km_ant']}% | 10km_ant={row['10km_ant']}%")
+    ap_val = row['AP_ant'] if row['AP_ant'] is not None else "N/A"
+    km1_val = row['1km_ant'] if row['1km_ant'] is not None else "N/A"
+    km10_val = row['10km_ant'] if row['10km_ant'] is not None else "N/A"
+    print(f"     AP_ant={ap_val}% | 1km_ant={km1_val}% | 10km_ant={km10_val}%")
 
 print("\n\n🎉 ¡PROCESAMIENTO COMPLETADO EN", tiempo_total, "MINUTOS!\n")
