@@ -1,0 +1,644 @@
+#!/usr/bin/env python3
+"""
+================================================================================
+ANÁLISIS DE ASENTAMIENTOS EN ÁREAS PROTEGIDAS USANDO ANILLOS PREEXISTENTES
+================================================================================
+
+PROYECTO FONDECYT Nº 1251080
+"Evaluación de las áreas protegidas y sus zonas de amortiguación en Chile: 
+un análisis geoespacial de su eficacia para contrarrestar el cambio global"
+
+AUTOR DEL CODIGO: Valentina Contreras
+
+================================================================================
+DESCRIPCIÓN GENERAL
+================================================================================
+
+Este script realiza análisis de datos de asentamientos calculando porcentajes
+de píxeles antrópicos y naturales en 97 Áreas Protegidas (AP) y sus anillos
+independientes preexistentes. A diferencia del script generador, este NO crea
+anillos, sino que trabaja con shapefiles de anillos ya generados.
+
+El procesamiento incluye:
+  - Análisis de AP sin modificación
+  - Cálculo de porcentajes sobre anillos independientes preexistentes (1-10km)
+  - Cálculo de porcentajes de asentamientos (ant) vs natural (otros)
+  - Exportación de resultados a CSV
+  - Generación de resumen estadístico
+
+================================================================================
+FLUJO DE TRABAJO
+================================================================================
+
+1. CONFIGURACIÓN
+   - Definir rutas de entrada (shapefile de AP, raster de asentamientos)
+   - Definir rutas de anillos preexistentes (1-10km)
+   - Definir ruta de salida (CSV con resultados)
+
+2. VERIFICACIÓN
+   - Validar existencia de archivos de entrada
+   - Verificar que todos los anillos existen
+   - Cargar cantidad de AP
+
+3. PROCESAMIENTO POR AP
+   - Para cada AP:
+     * Analizar AP sin modificación
+     * Calcular porcentajes en cada anillo preexistente (1-10km)
+     * Exportar resultados a diccionario
+
+4. EXPORTACIÓN
+   - Guardar resultados en CSV con formato tabulado
+   - Generar resumen de procesamiento
+
+5. RESUMEN
+   - Mostrar estadísticas finales
+   - Indicar ubicación de archivos de salida
+   - Mostrar primeras 5 APs procesadas
+
+================================================================================
+REQUISITOS TÉCNICOS
+================================================================================
+
+• Python 3.6+
+• ArcGIS Desktop / ArcGIS Pro (con extensión Spatial Analyst)
+• Módulos: arcpy, os, csv, numpy, time
+• Acceso a licencias de ArcGIS
+• Rásteres de entrada en formato GeoTIFF
+• Shapefiles de anillos preexistentes (1-10km)
+
+================================================================================
+FLUJO DE ENTRADA/SALIDA
+================================================================================
+
+ENTRADA:
+  - Shapefile de Áreas Protegidas (AP_terrestres_actualizadas.shp)
+  - Raster de asentamientos (Asen_2015.tif)
+  - 10 Shapefiles de anillos preexistentes (Anillo_1km_clip.shp a Anillo_10km_clip.shp)
+
+SALIDA:
+  - CSV con resultados de análisis (resultados_anillos_2015.csv)
+
+================================================================================
+CONFIGURACIÓN
+================================================================================
+
+Antes de ejecutar, verifica los siguientes parámetros:
+
+  • ruta_ap: Ruta al shapefile de Áreas Protegidas
+  • ruta_img: Ruta al raster de asentamientos
+  • ruta_anillos_base: Ruta base donde están los anillos preexistentes
+  • anillos_disponibles: Diccionario con rutas de cada anillo (1-10km)
+  • ruta_csv_salida: Ruta de salida para el CSV de resultados
+  • distancias_km: Lista de distancias a procesar (por defecto 1-10)
+
+================================================================================
+USO
+================================================================================
+
+1. Abrir el script en Python IDE (ArcGIS Pro Python Console recomendado)
+2. Configurar rutas de entrada/salida
+3. Verificar que anillos preexistentes existen en las rutas especificadas
+4. Ejecutar: python script_calculos_anillos_preexistentes.py
+5. Revisar reporte de procesamiento en consola
+6. Verificar archivo CSV en ruta_csv_salida
+
+================================================================================
+SALIDA DEL SCRIPT
+================================================================================
+
+El script genera:
+  • CSV con porcentajes de asentamientos para AP y cada anillo (1-10km)
+  • Reporte detallado en consola con progreso y resultados por AP
+  • Estadísticas finales (mín, máx, promedio)
+  • Información de ubicación de archivos generados
+  • Resumen de AP procesadas exitosamente
+
+================================================================================
+NOTAS IMPORTANTES - ANILLOS INDEPENDIENTES
+================================================================================
+
+• ANILLOS INDEPENDIENTES: Cada anillo es aislado del anterior
+  - AP_ant = Solo AP original (sin ningún anillo)
+  - 1km_ant = Solo anillo 1km (desde borde AP hasta 1km, SIN AP)
+  - 2km_ant = Solo anillo 2km (desde 1km hasta 2km, SIN AP, SIN anillo 1km)
+  - 3km_ant = Solo anillo 3km (desde 2km hasta 3km, SIN AP, SIN anillos previos)
+  - ...
+  - 10km_ant = Solo anillo 10km (desde 9km hasta 10km, SIN AP, SIN anillos previos)
+
+• LOS ANILLOS DEBEN EXISTIR:
+  - Este script NO genera anillos
+  - Los anillos deben haber sido creados previamente
+  - Se cargan desde las rutas especificadas en anillos_disponibles
+  - Si falta algún anillo, el script detiene la ejecución
+
+• CÁLCULO DE PORCENTAJES:
+  - ant% + otros% = 100% (nodata se considera implícitamente)
+  - ant = píxeles valor 1 (antrópico/asentamientos)
+  - otros = píxeles valor 0 (natural/vegetación)
+  - nodata (2) = se cuenta pero NO se incluye en división
+  - Porcentaje = (ant / (ant + otros)) × 100
+
+================================================================================
+DIFERENCIA ENTRE ANILLOS Y BUFFERS
+================================================================================
+
+ANILLOS INDEPENDIENTES (Este script):
+  - Cada anillo es completamente independiente del anterior
+  - 1km_ant = SOLO anillo 1km (sin AP, sin espacio 0-1km)
+  - 2km_ant = SOLO anillo 2km (sin AP, sin anillo 1km)
+  - No hay acumulación, cada uno es aislado
+
+BUFFERS ACUMULATIVOS:
+  - Cada buffer es acumulativo desde el borde de la AP
+  - 1km_ant = Desde borde AP hasta 1km (acumula solo 1km)
+  - 2km_ant = Desde borde AP hasta 2km (acumula 1km + 2km)
+  - Hay acumulación, cada uno contiene los anteriores
+
+================================================================================
+CÁLCULO DE DATOS
+================================================================================
+
+El script analiza píxeles raster con los siguientes valores:
+  - 1 = Antrópico (asentamientos, zonas urbanas, etc.)
+  - 0 = Natural (vegetación, agua, terreno natural)
+  - 2 = NoData (sin información)
+
+Para cada zona (AP, Anillo_1km, Anillo_2km, etc.):
+  1. Extrae máscara de píxeles dentro de la geometría
+  2. Convierte a array NumPy para mejor rendimiento
+  3. Cuenta píxeles con valor 1 (antrópico)
+  4. Cuenta píxeles con valor 0 (natural)
+  5. Cuenta píxeles con valor 2 (nodata) - implícito
+  6. Calcula porcentajes: (ant / (ant + otros)) × 100
+  7. Almacena en CSV junto con metadatos de la AP
+
+================================================================================
+CAMPOS DEL CSV DE SALIDA
+================================================================================
+
+Metadatos de la AP:
+  - FID: Identificador único
+  - NOMBRE_TOT: Nombre del área protegida
+  - CATEGORIA: Categoría de protección
+  - REGION: Región geográfica
+  - ANIO_CREAC: Año de creación
+  - AREA_HA: Área en hectáreas
+  - PRIM_METR: Perímetro en metros
+  - LATITUD: Latitud del centroide
+  - LONGITUD: Longitud del centroide
+  - ALT_MIN: Altitud mínima
+  - ALT_MAX: Altitud máxima
+  - ALT_MEAN: Altitud promedio
+  - ALT_MED: Altitud mediana
+  - ALT_STD: Desviación estándar de altitud
+
+Resultados de asentamientos (para cada distancia 1-10km):
+  - AP_ant: % asentamientos en AP (sin anillo)
+  - AP_otros: % natural en AP (sin anillo)
+  - 1km_ant: % asentamientos anillo 1km independiente
+  - 1km_otros: % natural anillo 1km independiente
+  - 2km_ant: % asentamientos anillo 2km independiente
+  - 2km_otros: % natural anillo 2km independiente
+  - ... hasta 10km_ant y 10km_otros
+
+
+================================================================================
+REQUISITOS DE ENTRADA - ESPECIFICACIONES
+================================================================================
+
+Shapefile de AP (AP_terrestres_actualizadas.shp):
+  - Geometría: POLYGON
+  - Campos requeridos: NOMBRE_TOT, CATEGORIA, REGION, ANIO_CREAC, AREA_HA,
+                       PRIM_METR, LATITUD, LONGITUD, ALT_MIN, ALT_MAX,
+                       ALT_MEAN, ALT_MED, ALT_STD
+  - Proyección: Debe ser consistente con el raster
+  - Cantidad: 97 polígonos (una por AP)
+
+Raster de asentamientos (Asen_2015.tif):
+  - Tipo: GeoTIFF
+  - Valores: 0 (natural), 1 (antrópico), 2 (nodata)
+  - Proyección: Debe coincidir con el shapefile
+  - Cobertura: Debe cubrir todas las AP y sus anillos
+  - Año: 2015 (o el año específico)
+
+Shapefiles de Anillos Preexistentes:
+  - Tipo: Geometría POLYGON
+  - Cantidad: 10 archivos (uno por cada km de 1 a 10)
+  - Proyección: Debe coincidir con shapefile de AP y raster
+  - Contenido: Geometrías de anillos independientes SIN AP
+
+================================================================================
+ERRORES COMUNES Y SOLUCIONES
+================================================================================
+
+Error: "No encontré ruta_ap"
+  → Verificar que la ruta existe y está correctamente escrita
+  → Verificar que el usuario tiene permisos de lectura
+
+Error: "No encontré ruta_img"
+  → Verificar que el TIF existe en la ruta especificada
+  → Verificar formato GeoTIFF válido
+  → Verificar que no está corrupto
+
+Error: "Anillo Xkm: NO ENCONTRADO"
+  → Verificar que todos los anillos existen en ruta_anillos_base
+  → Verificar nombres de archivo exactos (Anillo_1km_clip.shp, etc.)
+  → Verificar que la ruta está correctamente especificada
+
+ERROR en calcular_porcentajes_numpy:
+  → Puede ser que el raster y shapefile tengan proyecciones diferentes
+  → Verificar que proyecciones coinciden
+  → Verificar que anillos están dentro de cobertura raster
+
+CSV vacío o con pocos datos:
+  → Verificar que raster contiene valores 0, 1, 2
+  → Verificar que geometrías del shapefile son válidas
+  → Probar con una AP individual primero
+
+================================================================================
+NOTAS DE RENDIMIENTO
+================================================================================
+
+- Tiempo de procesamiento: ~1-2 minutos por AP (depende del hardware)
+- Memoria requerida: 8GB RAM mínimo recomendado
+- Espacio en disco: ~500MB para CSV
+- Uso de extensión Spatial: Se checkOut/CheckIn automáticamente
+- Operaciones: Se usan arrays NumPy para mejor rendimiento
+
+Para optimizar:
+  - Usar SSD en lugar de HDD
+  - Aumentar memoria RAM del equipo
+  - Reducir resolución del raster si es posible
+  - Procesar en lotes más pequeños si hay limitaciones
+
+
+
+================================================================================
+"""
+
+import arcpy
+import os
+import csv
+import numpy as np
+from arcpy import sa
+import time
+
+print("\n" + "="*70)
+print("PROCESAMIENTO FONDECYT - 97 APs (ANILLOS PREEXISTENTES)")
+print("="*70)
+
+# ======================================================
+# CONFIGURACIÓN
+# ======================================================
+
+ruta_ap = r"C:\Users\valen\Desktop\Fondecyt\areas_protegidas_totales_actualizadas-20251109T203707Z-1-001\AP_terrestres_actualizadas_26marz26\AP_terrestres_actualizadas_26marz26.shp"
+
+ruta_img = r"C:\Users\valen\Desktop\Fondecyt\settlements\Asentamientos_raster_Chile_clip\modificado\Asen_buf_2015_modificado.tif"
+
+ruta_csv_salida = r"C:\Users\valen\Desktop\Fondecyt\settlements\CSV\csv_anillos\resultados_anillos_2015.csv"
+
+# RUTAS DE ANILLOS PREEXISTENTES
+ruta_anillos_base = r"C:\Users\valen\Desktop\Fondecyt\areas_protegidas_totales_actualizadas-20251109T203707Z-1-001\Buffer\Anillos_clip\Anillos_clip_modificacion_v6"
+
+anillos_disponibles = {
+    1: os.path.join(ruta_anillos_base, "Anillo_1km_clip.shp"),
+    2: os.path.join(ruta_anillos_base, "Anillo_2km_clip.shp"),
+    3: os.path.join(ruta_anillos_base, "Anillo_3km_clip.shp"),
+    4: os.path.join(ruta_anillos_base, "Anillo_4km_clip.shp"),
+    5: os.path.join(ruta_anillos_base, "Anillo_5km_clip.shp"),
+    6: os.path.join(ruta_anillos_base, "Anillo_6km_clip.shp"),
+    7: os.path.join(ruta_anillos_base, "Anillo_7km_clip.shp"),
+    8: os.path.join(ruta_anillos_base, "Anillo_8km_clip.shp"),
+    9: os.path.join(ruta_anillos_base, "Anillo_9km_clip.shp"),
+    10: os.path.join(ruta_anillos_base, "Anillo_10km_clip.shp"),
+}
+
+distancias_km = list(range(1, 11))
+
+os.makedirs(os.path.dirname(ruta_csv_salida), exist_ok=True)
+
+print("\n📋 CONFIGURACIÓN:")
+print(f"  AP: {ruta_ap}")
+print(f"  Imagen: {ruta_img}")
+print(f"  CSV salida: {ruta_csv_salida}")
+print(f"  Anillos base: {ruta_anillos_base}")
+
+# ======================================================
+# VERIFICAR
+# ======================================================
+print("\n✓ Verificando archivos...")
+
+if not arcpy.Exists(ruta_ap):
+    print(f"❌ ERROR: No encontré {ruta_ap}")
+    exit(1)
+
+if not arcpy.Exists(ruta_img):
+    print(f"❌ ERROR: No encontré {ruta_img}")
+    exit(1)
+
+print("  ✓ Archivos principales encontrados")
+
+# Verificar anillos
+print("\n✓ Verificando anillos preexistentes...")
+anillos_no_encontrados = []
+for km, ruta_anillo in anillos_disponibles.items():
+    if not arcpy.Exists(ruta_anillo):
+        anillos_no_encontrados.append((km, ruta_anillo))
+        print(f"  ❌ Anillo {km}km: NO ENCONTRADO")
+    else:
+        print(f"  ✓ Anillo {km}km: OK")
+
+if anillos_no_encontrados:
+    print(f"\n❌ ERROR: Faltan {len(anillos_no_encontrados)} anillo(s)")
+    exit(1)
+
+# ======================================================
+# CARGAR DATOS
+# ======================================================
+print("\n📊 Cargando datos...")
+
+result = arcpy.management.GetCount(ruta_ap)
+num_ap = int(result[0])
+print(f"  ✓ AP cargadas: {num_ap} features")
+
+# Cargar raster
+raster_obj = arcpy.Raster(ruta_img)
+print(f"  ✓ Imagen raster cargada")
+
+print("\n" + "="*70)
+print("PROCESANDO TODAS LAS 97 ÁREAS PROTEGIDAS")
+print("USANDO ANILLOS PREEXISTENTES")
+print("="*70)
+
+# Habilitar Spatial
+try:
+    arcpy.CheckOutExtension("Spatial")
+except:
+    pass
+
+# ======================================================
+# FUNCIÓN: CALCULAR PORCENTAJES CON NUMPY
+# ======================================================
+
+def calcular_porcentajes_numpy(raster_obj, geometry):
+    """
+    Calcula porcentajes usando NumPy directamente
+    
+    CÁLCULO DE PORCENTAJES (nodata EXCLUIDO):
+    - Total = SOLO píxeles con valor 0 y 1 (sin contar nodata=2)
+    - ant% = (píxeles 1) / (píxeles 0 + píxeles 1) × 100
+    - otros% = (píxeles 0) / (píxeles 0 + píxeles 1) × 100
+    
+    IMPORTANTE: ant + otros siempre = 100% (nodata se calcula pero NO se incluye)
+    """
+    try:
+        # Extraer raster a array NumPy (en memoria)
+        raster_array = arcpy.RasterToNumPyArray(
+            sa.ExtractByMask(raster_obj, geometry),
+            nodata_to_value=0
+        )
+        
+        # Contar valores
+        count_1 = np.sum(raster_array == 1)      # Antrópico
+        count_0 = np.sum(raster_array == 0)      # Natural
+        count_2 = np.sum(raster_array == 2)      # NoData (EXCLUIDO del cálculo)
+        
+        count_ant = count_1
+        count_otros = count_0
+        
+        # Total SIN contar nodata (2) - SOLO píxeles 0 y 1
+        total = count_ant + count_otros
+        
+        if total > 0:
+            pct_ant = round(count_ant / total * 100, 2)
+            pct_otros = round(count_otros / total * 100, 2)
+        else:
+            pct_ant = None
+            pct_otros = None
+        
+        return pct_ant, pct_otros, count_ant, count_otros, count_2
+    
+    except Exception as e:
+        return None, None, 0, 0, 0
+
+# ======================================================
+# PROCESAR TODAS LAS 97 APs
+# ======================================================
+
+resultados_lista = []
+tiempo_inicio = time.time()
+
+cursor = arcpy.da.SearchCursor(ruta_ap, 
+    ['OID@', 'SHAPE@', 'NOMBRE_TOT', 'CATEGORIA', 'REGION', 'ANIO_CREAC', 
+     'AREA_HA', 'PRIM_METR', 'LATITUD', 'LONGITUD', 'ALT_MIN', 'ALT_MAX', 
+     'ALT_MEAN', 'ALT_MED', 'ALT_STD'])
+
+idx = 0
+for row in cursor:
+    idx += 1
+    
+    pct_progreso = round(idx / num_ap * 100, 1)
+    nombre_ap = str(row[2]) if row[2] else f'AP_{idx}'
+    
+    # MOSTRAR ENCABEZADO
+    print(f"\n{'='*70}")
+    print(f"AP {idx}/{num_ap} ({pct_progreso}%) - {nombre_ap}")
+    print(f"  Categoría: {row[3]} | Región: {row[4]} | Área: {row[6]} ha")
+    print(f"{'='*70}")
+    
+    tiempo_ap_inicio = time.time()
+    
+    fila = {
+        'FID': idx - 1,
+        'NOMBRE_TOT': row[2],
+        'CATEGORIA': row[3],
+        'REGION': row[4],
+        'ANIO_CREAC': row[5],
+        'AREA_HA': row[6],
+        'PRIM_METR': row[7],
+        'LATITUD': row[8],
+        'LONGITUD': row[9],
+        'ALT_MIN': row[10],
+        'ALT_MAX': row[11],
+        'ALT_MEAN': row[12],
+        'ALT_MED': row[13],
+        'ALT_STD': row[14],
+    }
+    
+    geometry = row[1]
+    
+    # ======================================================
+    # AP SIN ANILLO (INDEPENDIENTE)
+    # ======================================================
+    pct_ant_ap, pct_otros_ap, cnt_ant_ap, cnt_otros_ap, cnt_nodata_ap = calcular_porcentajes_numpy(raster_obj, geometry)
+    fila['AP_ant'] = pct_ant_ap
+    fila['AP_otros'] = pct_otros_ap
+    
+    if pct_ant_ap is not None:
+        print(f"  📍 AP (solo):") 
+        print(f"     ant={pct_ant_ap}% ({int(cnt_ant_ap)} píx) | otros={pct_otros_ap}% ({int(cnt_otros_ap)} píx) | nodata={int(cnt_nodata_ap)} píx")
+    else:
+        print(f"  📍 AP (solo): ❌ ERROR")
+    
+    # ======================================================
+    # ANILLOS PREEXISTENTES
+    # (anillos independientes, cada uno aislado)
+    # ======================================================
+    
+    print(f"  🔹 Procesando anillos preexistentes...")
+    
+    for km in distancias_km:
+        ruta_anillo = anillos_disponibles[km]
+        
+        try:
+            # Crear layer temporal del anillo
+            nombre_lyr = f"anillo_{km}_{idx}"
+            lyr_anillo = arcpy.management.MakeFeatureLayer(ruta_anillo, nombre_lyr)[0]
+            
+            # Seleccionar features que intersecten con el AP actual
+            arcpy.management.SelectLayerByLocation(
+                lyr_anillo,
+                "INTERSECT",
+                geometry,
+                selection_type="NEW_SELECTION"
+            )
+            
+            # Contar features seleccionadas
+            result = arcpy.management.GetCount(lyr_anillo)
+            count_seleccionados = int(result[0])
+            
+            if count_seleccionados > 0:
+                # Crear geometría combinada de los features seleccionados
+                geometria_combinada = None
+                cursor_anillo = arcpy.da.SearchCursor(lyr_anillo, ['SHAPE@'])
+                
+                for row_anillo in cursor_anillo:
+                    geom_anillo = row_anillo[0]
+                    if geom_anillo is not None and geom_anillo.area > 0:
+                        if geometria_combinada is None:
+                            geometria_combinada = geom_anillo
+                        else:
+                            try:
+                                geometria_combinada = geometria_combinada.union(geom_anillo)
+                            except:
+                                pass
+                
+                del cursor_anillo
+                
+                if geometria_combinada is not None and geometria_combinada.area > 0:
+                    # Calcular porcentajes
+                    pct_ant, pct_otros, cnt_ant, cnt_otros, cnt_nodata = calcular_porcentajes_numpy(
+                        raster_obj, 
+                        geometria_combinada
+                    )
+                    
+                    fila[f'{km}km_ant'] = pct_ant
+                    fila[f'{km}km_otros'] = pct_otros
+                    
+                    if pct_ant is not None:
+                        print(f"     Anillo {km}km: ant={pct_ant}% | otros={pct_otros}%")
+                    else:
+                        print(f"     Anillo {km}km: ⚠️  sin datos")
+                else:
+                    print(f"     Anillo {km}km: ⚠️  área insuficiente")
+                    fila[f'{km}km_ant'] = None
+                    fila[f'{km}km_otros'] = None
+            else:
+                print(f"     Anillo {km}km: ⚠️  sin intersección")
+                fila[f'{km}km_ant'] = None
+                fila[f'{km}km_otros'] = None
+            
+            # Limpiar
+            try:
+                arcpy.management.Delete(lyr_anillo)
+            except:
+                pass
+                
+        except Exception as e:
+            print(f"     Anillo {km}km: ❌ ERROR - {str(e)[:50]}")
+            fila[f'{km}km_ant'] = None
+            fila[f'{km}km_otros'] = None
+    
+    resultados_lista.append(fila)
+    
+    tiempo_ap_fin = time.time()
+    tiempo_ap = round(tiempo_ap_fin - tiempo_ap_inicio, 1)
+    
+    if fila['AP_ant'] is not None:
+        print(f"\n  ✅ COMPLETADO ({tiempo_ap}s)")
+    else:
+        print(f"\n  ❌ ERROR ({tiempo_ap}s)")
+
+del cursor
+
+tiempo_fin = time.time()
+tiempo_total = round((tiempo_fin - tiempo_inicio) / 60, 1)
+
+# Devolver licencia
+try:
+    arcpy.CheckInExtension("Spatial")
+except:
+    pass
+
+# ======================================================
+# EXPORTAR A CSV
+# ======================================================
+print("\n" + "="*70)
+print("💾 EXPORTANDO CSV...")
+
+columnas_orden = [
+    'FID', 'NOMBRE_TOT', 'CATEGORIA', 'REGION', 'ANIO_CREAC', 'AREA_HA', 'PRIM_METR',
+    'LATITUD', 'LONGITUD', 'ALT_MIN', 'ALT_MAX', 'ALT_MEAN', 'ALT_MED', 'ALT_STD',
+    'AP_ant', 'AP_otros',
+    '1km_ant', '1km_otros', '2km_ant', '2km_otros', '3km_ant', '3km_otros',
+    '4km_ant', '4km_otros', '5km_ant', '5km_otros', '6km_ant', '6km_otros',
+    '7km_ant', '7km_otros', '8km_ant', '8km_otros', '9km_ant', '9km_otros',
+    '10km_ant', '10km_otros'
+]
+
+with open(ruta_csv_salida, 'w', newline='', encoding='utf-8') as csvfile:
+    writer = csv.DictWriter(csvfile, fieldnames=columnas_orden, 
+                           extrasaction='ignore', delimiter='\t')
+    writer.writeheader()
+    writer.writerows(resultados_lista)
+
+print(f"  ✓ CSV guardado en:")
+print(f"    {ruta_csv_salida}")
+
+# ======================================================
+# RESUMEN FINAL
+# ======================================================
+print("\n" + "="*70)
+print("✅ PROCESAMIENTO COMPLETADO")
+print("="*70 + "\n")
+
+con_datos = sum(1 for r in resultados_lista if r['AP_ant'] is not None)
+
+print("📊 RESUMEN FINAL:")
+print(f"  Total de AP procesadas: {len(resultados_lista)}")
+print(f"  AP con datos: {con_datos}/{len(resultados_lista)}")
+print(f"  Tiempo total: {tiempo_total} minutos")
+print(f"  Tiempo promedio por AP: {round(tiempo_total*60/len(resultados_lista), 1)} segundos")
+print(f"  Cálculo: ant=solo 1 | otros=solo 0 | nodata(2)=no incluido")
+print(f"  Anillos utilizados: PREEXISTENTES (no generados)")
+print(f"  Tipo: ANILLOS INDEPENDIENTES (cada anillo aislado)")
+print()
+
+valores_ap_ant = [r['AP_ant'] for r in resultados_lista if r['AP_ant'] is not None]
+
+if valores_ap_ant:
+    print("📈 ESTADÍSTICAS - AP_ant (%):")
+    print(f"  Mínimo: {min(valores_ap_ant)}%")
+    print(f"  Máximo: {max(valores_ap_ant)}%")
+    print(f"  Promedio: {round(sum(valores_ap_ant)/len(valores_ap_ant), 2)}%")
+    print()
+
+print("📌 PRIMERAS 5 APs PROCESADAS:")
+for i, row in enumerate(resultados_lista[:5]):
+    print(f"  {i+1}. {row['NOMBRE_TOT']}")
+    ap_val = row['AP_ant'] if row['AP_ant'] is not None else "N/A"
+    km1_val = row['1km_ant'] if row['1km_ant'] is not None else "N/A"
+    km10_val = row['10km_ant'] if row['10km_ant'] is not None else "N/A"
+    print(f"     AP_ant={ap_val}% | 1km_ant={km1_val}% | 10km_ant={km10_val}%")
+
+print("\n\n🎉 ¡PROCESAMIENTO COMPLETADO EN", tiempo_total, "MINUTOS!\n")
