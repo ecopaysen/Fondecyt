@@ -10,19 +10,25 @@ un análisis geoespacial de su eficacia para contrarrestar el cambio global"
 
 AUTOR DEL CODIGO: Valentina Contreras
 
+
 ================================================================================
 DESCRIPCIÓN GENERAL
 ================================================================================
 
 Este script realiza análisis de datos de asentamientos calculando porcentajes
-de píxeles antrópicos y naturales en 97 Áreas Protegidas (AP) y sus buffers
-acumulativos preexistentes. A diferencia del script generador, este NO crea
-buffers, sino que trabaja con shapefiles de buffers ya generados.
+de píxeles antrópicos, naturales y nodata en 97 Áreas Protegidas (AP) y sus 
+buffers acumulativos preexistentes.
+
+  - Cada distancia (km) tiene TRES columnas: Xkm_ant, Xkm_otros, Xkm_nodata
+  - Los tres porcentajes SUMAN 100% (no existen porcentajes implícitos)
+  - ant% = (píxeles valor 1) / TOTAL × 100
+  - otros% = (píxeles valor 0) / TOTAL × 100
+  - nodata% = (píxeles valor 2) / TOTAL × 100
 
 El procesamiento incluye:
   - Análisis de AP sin modificación
   - Cálculo de porcentajes sobre buffers acumulativos preexistentes (1-10km)
-  - Cálculo de porcentajes de asentamientos (ant) vs natural (otros)
+  - Cálculo de porcentajes de asentamientos (ant) vs natural (otros) vs nodata
   - Exportación de resultados a CSV
   - Generación de resumen estadístico
 
@@ -42,7 +48,7 @@ FLUJO DE TRABAJO
 
 3. PROCESAMIENTO POR AP
    - Para cada AP:
-     * Analizar AP sin modificación
+     * Analizar AP sin modificación (3 columnas: ant, otros, nodata)
      * Calcular porcentajes en cada buffer preexistente (1-10km)
      * Exportar resultados a diccionario
 
@@ -77,6 +83,7 @@ ENTRADA:
 
 SALIDA:
   - CSV con resultados de análisis (resultados_buffer_2017.csv)
+    Cada distancia tiene 3 columnas: Xkm_ant, Xkm_otros, Xkm_nodata
 
 ================================================================================
 CONFIGURACIÓN
@@ -98,66 +105,33 @@ USO
 1. Abrir el script en Python IDE (ArcGIS Pro Python Console recomendado)
 2. Configurar rutas de entrada/salida
 3. Verificar que buffers preexistentes existen en las rutas especificadas
-4. Ejecutar: python script_calculos_buffers_preexistentes_v3.py
+4. Ejecutar: python script_calculos_buffers_preexistentes_v4.py
 5. Revisar reporte de procesamiento en consola
 6. Verificar archivo CSV en ruta_csv_salida
 
 ================================================================================
-SALIDA DEL SCRIPT
+CÁLCULO DE DATOS 
 ================================================================================
+  - ant% + otros% + nodata% = 100% (TODOS los porcentajes EXPLÍCITOS)
+  - Cada uno representa su porcentaje del TOTAL de píxeles
+  - No hay implícitos: todo suma exactamente 100%
 
-El script genera:
-  • CSV con porcentajes de asentamientos para AP y cada buffer (1-10km)
-  • Reporte detallado en consola con progreso y resultados por AP
-  • Estadísticas finales (mín, máx, promedio)
-  • Información de ubicación de archivos generados
-  • Resumen de AP procesadas exitosamente
+EJEMPLO CON VALORES:
+Supongamos 235897 píxeles totales:
+  - 483 píxeles valor 1 (ant)
+  - 200264 píxeles valor 0 (otros)
+  - 35150 píxeles valor 2 (nodata)
 
-================================================================================
-NOTAS IMPORTANTES - BUFFERS ACUMULATIVOS
-================================================================================
+CÁLCULO:
+  - ant% = 483 / 235897 × 100 = 0.20%
+  - otros% = 200264 / 235897 × 100 = 84.89%
+  - nodata% = 35150 / 235897 × 100 = 14.91%
+  - SUMA = 0.20% + 84.89% + 14.91% = 100.00%
 
-• BUFFERS ACUMULATIVOS: Cada buffer es acumulativo desde el borde de la AP
-  - AP_ant = Solo AP original (sin ningún buffer)
-  - 1km_ant = Desde borde AP hasta 1km (anillo 1km, SIN AP)
-  - 2km_ant = Desde borde AP hasta 2km (anillos 1km+2km, SIN AP)
-  - 3km_ant = Desde borde AP hasta 3km (anillos 1km+2km+3km, SIN AP)
-  - ...
-  - 10km_ant = Desde borde AP hasta 10km (todos anillos acumulados, SIN AP)
 
-• LOS BUFFERS DEBEN EXISTIR:
-  - Este script NO genera buffers
-  - Los buffers deben haber sido creados previamente
-  - Se cargan desde las rutas especificadas en buffers_disponibles
-  - Si falta algún buffer, el script detiene la ejecución
-
-• CÁLCULO DE PORCENTAJES:
-  - ant% + otros% = 100% (nodata se considera implícitamente)
-  - ant = píxeles valor 1 (antrópico/asentamientos)
-  - otros = píxeles valor 0 (natural/vegetación)
-  - nodata (2) = se cuenta pero NO se incluye en división
-  - Porcentaje = (ant / (ant + otros)) × 100
 
 ================================================================================
-CÁLCULO DE DATOS
-================================================================================
-
-El script analiza píxeles raster con los siguientes valores:
-  - 1 = Antrópico (asentamientos, zonas urbanas, etc.)
-  - 0 = Natural (vegetación, agua, terreno natural)
-  - 2 = NoData (sin información)
-
-Para cada zona (AP, Buffer_1km, Buffer_2km, etc.):
-  1. Extrae máscara de píxeles dentro de la geometría
-  2. Convierte a array NumPy para mejor rendimiento
-  3. Cuenta píxeles con valor 1 (antrópico)
-  4. Cuenta píxeles con valor 0 (natural)
-  5. Cuenta píxeles con valor 2 (nodata) - implícito
-  6. Calcula porcentajes: (ant / (ant + otros)) × 100
-  7. Almacena en CSV junto con metadatos de la AP
-
-================================================================================
-CAMPOS DEL CSV DE SALIDA
+CAMPOS DEL CSV DE SALIDA 
 ================================================================================
 
 Metadatos de la AP:
@@ -176,15 +150,22 @@ Metadatos de la AP:
   - ALT_MED: Altitud mediana
   - ALT_STD: Desviación estándar de altitud
 
-Resultados de asentamientos (para cada distancia 1-10km):
-  - AP_ant: % asentamientos en AP (sin buffer)
-  - AP_otros: % natural en AP (sin buffer)
-  - 1km_ant: % asentamientos buffer 1km acumulativo
-  - 1km_otros: % natural buffer 1km acumulativo
-  - 2km_ant: % asentamientos buffer 2km acumulativo
-  - 2km_otros: % natural buffer 2km acumulativo
-  - ... hasta 10km_ant y 10km_otros
+Resultados AP (sin buffers):
+  - AP_ant: % asentamientos en AP (valor 1)
+  - AP_otros: % natural en AP (valor 0)
+  - AP_nodata: % sin datos en AP (valor 2)
+  - SUMA: AP_ant + AP_otros + AP_nodata = 100%
 
+Resultados para cada buffer (1km-10km):
+  - 1km_ant: % asentamientos buffer 1km
+  - 1km_otros: % natural buffer 1km
+  - 1km_nodata: % sin datos buffer 1km
+  - SUMA: siempre 100%
+  
+  - 2km_ant, 2km_otros, 2km_nodata
+  - 3km_ant, 3km_otros, 3km_nodata
+  - ... (hasta 10km)
+  - 10km_ant, 10km_otros, 10km_nodata
 
 
 ================================================================================
@@ -210,28 +191,11 @@ ERROR en calcular_porcentajes_numpy:
   → Verificar que proyecciones coinciden
   → Verificar que buffers están dentro de cobertura raster
 
-CSV vacío o con pocos datos:
+CSV con valores None o sin datos:
   → Verificar que raster contiene valores 0, 1, 2
   → Verificar que geometrías del shapefile son válidas
   → Probar con una AP individual primero
 
-
-
-================================================================================
-NOTAS DE RENDIMIENTO
-================================================================================
-
-- Tiempo de procesamiento: ~1-2 minutos por AP (depende del hardware)
-- Memoria requerida: 8GB RAM mínimo recomendado
-- Espacio en disco: ~500MB para CSV
-- Uso de extensión Spatial: Se checkOut/CheckIn automáticamente
-- Operaciones: Se usan arrays NumPy para mejor rendimiento
-
-Para optimizar:
-  - Usar SSD en lugar de HDD
-  - Aumentar memoria RAM del equipo
-  - Reducir resolución del raster si es posible
-  - Procesar en lotes más pequeños si hay limitaciones
 
 
 ================================================================================
@@ -245,7 +209,8 @@ from arcpy import sa
 import time
 
 print("\n" + "="*70)
-print("PROCESAMIENTO FONDECYT - 97 APs (BUFFERS PREEXISTENTES v3)")
+print("PROCESAMIENTO FONDECYT - 97 APs (BUFFERS PREEXISTENTES v4)")
+print("CON NODATA EXPLÍCITO")
 print("="*70)
 
 # ======================================================
@@ -345,19 +310,19 @@ def calcular_porcentajes_numpy(raster_obj, geometry):
     """
     Calcula porcentajes usando NumPy directamente
     
-    CÁLCULO CORRECTO:
+    CÁLCULO CORRECTO (VERSIÓN 4.0):
     - Total = píxeles 0 + píxeles 1 + píxeles 2 (100% del área)
-    - ant% = (píxeles 1) / (píxeles 0 + píxeles 1) × 100
-    - otros% = (píxeles 0) / (píxeles 0 + píxeles 1) × 100
-    - nodata se CUENTA en el 100% pero NO se incluye en los porcentajes
+    - ant% = (píxeles valor 1) / TOTAL × 100
+    - otros% = (píxeles valor 0) / TOTAL × 100
+    - nodata% = (píxeles valor 2) / TOTAL × 100
+    - SUMA: ant% + otros% + nodata% = 100%
     
     EJEMPLO: Si hay 483 píx valor 1, 200264 píx valor 0, 35150 píx nodata(2):
     - Total área = 483 + 200264 + 35150 = 235897 (100%)
-    - Cálculo % = 483 / (483 + 200264) = 483/200747
-    - ant% = 483/200747 × 100 = 0.24%
-    - otros% = 200264/200747 × 100 = 99.76%
-    - Suma: 0.24% + 99.76% = 100% (de los datos con información)
-    - NoData representa: 35150/235897 = 14.9% del área total
+    - ant% = 483 / 235897 × 100 = 0.20%
+    - otros% = 200264 / 235897 × 100 = 84.89%
+    - nodata% = 35150 / 235897 × 100 = 14.91%
+    - Suma: 0.20% + 84.89% + 14.91% = 100.00%
     """
     try:
         # Extraer raster a array NumPy (en memoria)
@@ -369,25 +334,28 @@ def calcular_porcentajes_numpy(raster_obj, geometry):
         # Contar valores
         count_1 = np.sum(raster_array == 1)      # Antrópico
         count_0 = np.sum(raster_array == 0)      # Natural
-        count_2 = np.sum(raster_array == 2)      # NoData (se cuenta pero NO se incluye en división)
+        count_2 = np.sum(raster_array == 2)      # NoData
         
         count_ant = count_1
         count_otros = count_0
+        count_nodata = count_2
         
-        # Total para PORCENTAJE: SOLO píxeles 0 y 1 (nodata no entra en división)
-        total_para_porcentaje = count_ant + count_otros
+        # Total para PORCENTAJE: TODOS los píxeles (0, 1 y 2)
+        total_para_porcentaje = count_ant + count_otros + count_nodata
         
         if total_para_porcentaje > 0:
             pct_ant = round(count_ant / total_para_porcentaje * 100, 2)
             pct_otros = round(count_otros / total_para_porcentaje * 100, 2)
+            pct_nodata = round(count_nodata / total_para_porcentaje * 100, 2)
         else:
             pct_ant = None
             pct_otros = None
+            pct_nodata = None
         
-        return pct_ant, pct_otros, count_ant, count_otros, count_2
+        return pct_ant, pct_otros, pct_nodata, count_ant, count_otros, count_nodata
     
     except Exception as e:
-        return None, None, 0, 0, 0
+        return None, None, None, 0, 0, 0
 
 # ======================================================
 # PROCESAR TODAS LAS 97 APs
@@ -438,13 +406,17 @@ for row in cursor:
     # ======================================================
     # AP SIN BUFFER (INDEPENDIENTE)
     # ======================================================
-    pct_ant_ap, pct_otros_ap, cnt_ant_ap, cnt_otros_ap, cnt_nodata_ap = calcular_porcentajes_numpy(raster_obj, geometry)
+    pct_ant_ap, pct_otros_ap, pct_nodata_ap, cnt_ant_ap, cnt_otros_ap, cnt_nodata_ap = calcular_porcentajes_numpy(raster_obj, geometry)
+    
     fila['AP_ant'] = pct_ant_ap
     fila['AP_otros'] = pct_otros_ap
+    fila['AP_nodata'] = pct_nodata_ap
     
     if pct_ant_ap is not None:
+        total_check = pct_ant_ap + pct_otros_ap + pct_nodata_ap
         print(f"  📍 AP (solo):") 
-        print(f"     ant={pct_ant_ap}% ({int(cnt_ant_ap)} píx) | otros={pct_otros_ap}% ({int(cnt_otros_ap)} píx) | nodata={int(cnt_nodata_ap)} píx")
+        print(f"     ant={pct_ant_ap}% ({int(cnt_ant_ap)} píx) | otros={pct_otros_ap}% ({int(cnt_otros_ap)} píx) | nodata={pct_nodata_ap}% ({int(cnt_nodata_ap)} píx)")
+        print(f"     SUMA: {pct_ant_ap}% + {pct_otros_ap}% + {pct_nodata_ap}% = {total_check}%")
     else:
         print(f"  📍 AP (solo): ❌ ERROR")
     
@@ -470,7 +442,7 @@ for row in cursor:
                 selection_type="NEW_SELECTION"
             )
             
-            # Contar features seleccionadas
+            # Contar features seleccionados
             result = arcpy.management.GetCount(lyr_buffer)
             count_seleccionados = int(result[0])
             
@@ -495,26 +467,30 @@ for row in cursor:
                 
                 if geometria_combinada is not None and geometria_combinada.area > 0:
                     # Calcular porcentajes
-                    pct_ant, pct_otros, cnt_ant, cnt_otros, cnt_nodata = calcular_porcentajes_numpy(
+                    pct_ant, pct_otros, pct_nodata, cnt_ant, cnt_otros, cnt_nodata = calcular_porcentajes_numpy(
                         raster_obj, 
                         geometria_combinada
                     )
                     
                     fila[f'{km}km_ant'] = pct_ant
                     fila[f'{km}km_otros'] = pct_otros
+                    fila[f'{km}km_nodata'] = pct_nodata
                     
                     if pct_ant is not None:
-                        print(f"     Buffer {km}km: ant={pct_ant}% | otros={pct_otros}%")
+                        total_check = pct_ant + pct_otros + pct_nodata
+                        print(f"     Buffer {km}km: ant={pct_ant}% | otros={pct_otros}% | nodata={pct_nodata}% (suma={total_check}%)")
                     else:
                         print(f"     Buffer {km}km: ⚠️  sin datos")
                 else:
                     print(f"     Buffer {km}km: ⚠️  área insuficiente")
                     fila[f'{km}km_ant'] = None
                     fila[f'{km}km_otros'] = None
+                    fila[f'{km}km_nodata'] = None
             else:
                 print(f"     Buffer {km}km: ⚠️  sin intersección")
                 fila[f'{km}km_ant'] = None
                 fila[f'{km}km_otros'] = None
+                fila[f'{km}km_nodata'] = None
             
             # Limpiar
             try:
@@ -526,6 +502,7 @@ for row in cursor:
             print(f"     Buffer {km}km: ❌ ERROR - {str(e)[:50]}")
             fila[f'{km}km_ant'] = None
             fila[f'{km}km_otros'] = None
+            fila[f'{km}km_nodata'] = None
     
     resultados_lista.append(fila)
     
@@ -557,11 +534,17 @@ print("💾 EXPORTANDO CSV...")
 columnas_orden = [
     'FID', 'NOMBRE_TOT', 'CATEGORIA', 'REGION', 'ANIO_CREAC', 'AREA_HA', 'PRIM_METR',
     'LATITUD', 'LONGITUD', 'ALT_MIN', 'ALT_MAX', 'ALT_MEAN', 'ALT_MED', 'ALT_STD',
-    'AP_ant', 'AP_otros',
-    '1km_ant', '1km_otros', '2km_ant', '2km_otros', '3km_ant', '3km_otros',
-    '4km_ant', '4km_otros', '5km_ant', '5km_otros', '6km_ant', '6km_otros',
-    '7km_ant', '7km_otros', '8km_ant', '8km_otros', '9km_ant', '9km_otros',
-    '10km_ant', '10km_otros'
+    'AP_ant', 'AP_otros', 'AP_nodata',
+    '1km_ant', '1km_otros', '1km_nodata',
+    '2km_ant', '2km_otros', '2km_nodata',
+    '3km_ant', '3km_otros', '3km_nodata',
+    '4km_ant', '4km_otros', '4km_nodata',
+    '5km_ant', '5km_otros', '5km_nodata',
+    '6km_ant', '6km_otros', '6km_nodata',
+    '7km_ant', '7km_otros', '7km_nodata',
+    '8km_ant', '8km_otros', '8km_nodata',
+    '9km_ant', '9km_otros', '9km_nodata',
+    '10km_ant', '10km_otros', '10km_nodata'
 ]
 
 with open(ruta_csv_salida, 'w', newline='', encoding='utf-8') as csvfile:
@@ -600,10 +583,20 @@ if valores_ap_ant:
 
 print("📌 PRIMERAS 5 APs PROCESADAS:")
 for i, row in enumerate(resultados_lista[:5]):
-    print(f"  {i+1}. {row['NOMBRE_TOT']}")
-    ap_val = row['AP_ant'] if row['AP_ant'] is not None else "N/A"
-    km1_val = row['1km_ant'] if row['1km_ant'] is not None else "N/A"
-    km10_val = row['10km_ant'] if row['10km_ant'] is not None else "N/A"
-    print(f"     AP_ant={ap_val}% | 1km_ant={km1_val}% | 10km_ant={km10_val}%")
+    print(f"\n  {i+1}. {row['NOMBRE_TOT']}")
+    ap_ant = row['AP_ant'] if row['AP_ant'] is not None else "N/A"
+    ap_otros = row['AP_otros'] if row['AP_otros'] is not None else "N/A"
+    ap_nodata = row['AP_nodata'] if row['AP_nodata'] is not None else "N/A"
+    print(f"     AP: ant={ap_ant}% | otros={ap_otros}% | nodata={ap_nodata}%")
+    
+    km1_ant = row['1km_ant'] if row['1km_ant'] is not None else "N/A"
+    km1_otros = row['1km_otros'] if row['1km_otros'] is not None else "N/A"
+    km1_nodata = row['1km_nodata'] if row['1km_nodata'] is not None else "N/A"
+    print(f"     1km: ant={km1_ant}% | otros={km1_otros}% | nodata={km1_nodata}%")
+    
+    km10_ant = row['10km_ant'] if row['10km_ant'] is not None else "N/A"
+    km10_otros = row['10km_otros'] if row['10km_otros'] is not None else "N/A"
+    km10_nodata = row['10km_nodata'] if row['10km_nodata'] is not None else "N/A"
+    print(f"     10km: ant={km10_ant}% | otros={km10_otros}% | nodata={km10_nodata}%")
 
 print("\n\n🎉 ¡PROCESAMIENTO COMPLETADO EN", tiempo_total, "MINUTOS!\n")
