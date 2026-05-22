@@ -1,0 +1,428 @@
+"""
+================================================================================
+GENERACIÓN DE CENTROIDES DE ASENTAMIENTOS EN ÁREAS PROTEGIDAS
+================================================================================
+
+PROYECTO FONDECYT Nº 1251080
+"Evaluación de las áreas protegidas y sus zonas de amortiguación en Chile: 
+un análisis geoespacial de su eficacia para contrarrestar el cambio global"
+
+AUTOR DEL CODIGO: Valentina Contreras
+
+================================================================================
+DESCRIPCIÓN GENERAL
+================================================================================
+
+Este script procesa rásteres de asentamientos humanos y genera centroides 
+(puntos) a partir de los píxeles clasificados dentro de las 97 Áreas 
+Protegidas (APs) terrestres de Chile y sus zonas de amortiguación (buffer 
+de 10km).
+
+El objetivo es cuantificar y espacializar los asentamientos humanos dentro 
+y alrededor de las APs para evaluar su eficacia en contrarrestar el cambio 
+global (expansión urbana, deforestación, etc.).
+
+================================================================================
+CLASIFICACIÓN DE PÍXELES EN RÁSTERES
+================================================================================
+
+Los rásteres de entrada contienen tres valores:
+  • 0 = Píxeles SIN asentamientos (áreas naturales/sin clasificar)
+  • 1 = Píxeles CON asentamientos (áreas antrópicas)
+  • 2 = Píxeles NoData (sin información disponible)
+
+Este script extrae TODOS los píxeles con valor 1 (asentamientos) y genera 
+un punto centroide por cada píxel clasificado, preservando atributos de 
+las Áreas Protegidas.
+
+================================================================================
+FLUJO DE TRABAJO DETALLADO
+================================================================================
+
+1. LECTURA DE ENTRADA
+   - Lee rásteres de asentamientos en formato GeoTIFF (por año)
+   - Itera sobre cada raster en la carpeta especificada
+
+2. ITERACIÓN POR ÁREAS PROTEGIDAS
+   - Lee polígonos de las 97 APs terrestres con buffer de 10km
+   - Para cada AP, extrae atributos (nombre, categoría, región, etc.)
+
+3. RECORTE DE RÁSTERES
+   - Delimita el ráster según la extensión del polígono de cada AP
+   - Mantiene solo píxeles dentro o 10km alrededor de cada AP
+
+4. CONVERSIÓN A COORDENADAS
+   - Convierte píxeles clasificados (valor 1) a índices (fila, columna)
+   - Transforma índices a coordenadas geográficas (X, Y) en UTM Zone 19S
+   - Calcula centroide de cada píxel: posición + 0.5 × tamaño de celda
+
+5. GENERACIÓN DE FEATURE CLASS
+   - Crea geodatabase (GDB) y feature class de puntos por año
+   - Inserta cada centroide con atributos heredados de la AP correspondiente
+   - Asigna ID único a cada centroide (CENT_ID)
+
+6. SALIDA
+   - Genera feature class en geodatabase con estructura:
+     • CENT_ID: Identificador único del centroide
+     • SHAPE@XY: Coordenadas geográficas (X, Y)
+     • Atributos de AP: NOMBRE_TOT, CATEGORIA, REGIÓN, etc.
+
+================================================================================
+REQUISITOS TÉCNICOS
+================================================================================
+
+• Python 3.6+
+• ArcGIS Desktop / ArcGIS Pro con extensión Spatial Analyst
+• Módulos: arcpy, numpy, os, time
+• Acceso a licencias de ArcGIS
+• Rásteres en formato GeoTIFF
+• Shapefile de APs con buffer de 10km
+
+================================================================================
+ESTRUCTURA DE ENTRADA/SALIDA
+================================================================================
+
+ENTRADA:
+  {RASTER_FOLDER}/
+  ├── Asentamientos_raster_2015.tif
+  ├── Asentamientos_raster_2020.tif
+  └── [otros rásteres por año...]
+
+  {BUFFER_SHAPEFILE}
+  └── APs_10KM_buffer.shp (con 97 polígonos + atributos)
+
+SALIDA:
+  {OUTPUT_FOLDER}/
+  ├── centroides_2015/
+  │   └── centroides_2015.gdb/
+  │       └── Centroid_2015_10KM_AP [Feature Class]
+  ├── centroides_2020/
+  │   └── centroides_2020.gdb/
+  │       └── Centroid_2020_10KM_AP [Feature Class]
+  └── [otras carpetas por año...]
+
+================================================================================
+CAMPOS EN FEATURE CLASS DE SALIDA
+================================================================================
+
+CAMPOS GENERADOS:
+  • CENT_ID (LONG): Identificador único del centroide
+  • SHAPE@XY: Coordenadas (X, Y) en UTM Zone 19S
+
+CAMPOS HEREDADOS DE SHAPEFILE DE APs:
+  • NOMBRE_TOT: Nombre total del AP
+  • CATEGORIA: Categoría de protección (Parque Nacional, Reserva, etc.)
+  • NOMBRE_UNI: Nombre único del AP
+  • REGION: Región administrativa donde se ubica
+  • PROVINCIA: Provincia
+  • COMUNA: Comuna
+  • DECRETO_VI: Decreto de vigencia
+  • ANIO_CREAC: Año de creación del AP
+  • CAT_PREV: Categoría de prevención
+  • CAMB_SUP: Cambio de superficie
+  • AREA_HA: Área en hectáreas
+  • PRIM_METR: Perímetro en metros
+  • LONGITUD: Longitud (coordenada)
+  • LATITUD: Latitud (coordenada)
+  • ALT_MIN: Altitud mínima
+  • ALT_MAX: Altitud máxima
+  • ALT_MEAN: Altitud media
+  • ALT_MED: Altitud mediana
+  • ALT_STD: Desviación estándar de altitud
+  • ORIG_FID: ID original del feature
+
+================================================================================
+CONFIGURACIÓN ANTES DE EJECUTAR
+================================================================================
+
+Modifica los siguientes parámetros en la sección "CONFIGURACIÓN DE RUTAS":
+
+  • RASTER_FOLDER: Ruta a carpeta con rásteres originales
+    Ejemplo: r"C:\datos\asentamientos\rasters"
+
+  • RASTER_PATTERN: Patrón de búsqueda de archivos (ej: "*.tif")
+
+  • BUFFER_SHAPEFILE: Ruta al shapefile de APs con buffer 10km
+    Ejemplo: r"C:\datos\areas_protegidas\APs_10KM_buffer.shp"
+
+  • OUTPUT_FOLDER: Ruta a carpeta de salida (se crea si no existe)
+    Ejemplo: r"C:\resultados\centroides"
+
+  • SR_DESTINO: Sistema de referencia espacial (por defecto: EPSG:32719)
+    32719 = WGS84 UTM Zone 19S (proyección estándar para Chile)
+
+================================================================================
+INSTRUCCIONES DE USO
+================================================================================
+
+1. Abrir el script en IDE Python o terminal de ArcGIS
+2. Configurar las rutas de entrada/salida
+3. Verificar que los rásteres estén en formato GeoTIFF
+4. Verificar que el shapefile de APs contiene los campos especificados
+5. Ejecutar: python generacion_centroides.py
+6. Revisar reporte de procesamiento en consola
+7. Verificar archivos generados en OUTPUT_FOLDER
+
+================================================================================
+SALIDA DEL SCRIPT
+================================================================================
+
+El script genera:
+  • Carpetas anuales con estructura: OUTPUT_FOLDER/centroides_{año}/
+  • Geodatabases (GDB) con feature classes de centroides
+  • Reporte en consola con resumen por año:
+    - Número total de centroides generados
+    - Tiempo de procesamiento
+    - Errores detectados por área protegida
+
+Ejemplo de salida:
+  ==============================
+   PROCESANDO AÑO 2015
+  ==============================
+     [1/97] Parque Nacional La Campana — Total: 1,234
+     [2/97] Reserva Nacional Nonguén — Total: 2,567
+     ...
+   AÑO 2015 COMPLETO — 45,678 puntos generados
+   Tiempo de procesamiento: 127.3s
+   Salida: C:\resultados\centroides\centroides_2015\centroides_2015.gdb\Centroid_2015_10KM_AP
+
+================================================================================
+NOTAS IMPORTANTES
+================================================================================
+
+• Cada píxel con asentamientos (valor 1) genera UN centroide
+• Las coordenadas se calculan en el centro del píxel
+• Se preservan las propiedades espaciales (CRS, resolución, extensión)
+• En caso de error en una AP, continúa procesando las demás
+• Requiere permisos de escritura en OUTPUT_FOLDER
+• El procesamiento puede tardar según cantidad de píxeles y APs
+• La limpieza de caché se ejecuta cada 20 APs para optimizar memoria
+
+================================================================================
+MONITOREO Y DIAGNÓSTICO
+================================================================================
+
+Recomendaciones para validar resultados:
+
+1. Verificar conteo de centroides por AP
+   - Visitar feature class en ArcGIS
+   - Comparar con mapa de asentamientos original
+
+2. Validar coordenadas
+   - Comprobar que están dentro/cerca de las APs
+   - Revisar en contexto de imágenes satelitales
+
+3. Revisar atributos
+   - Confirmar que todos los campos están completos
+   - Validar IDs únicos (CENT_ID)
+
+4. Analizar tendencias
+   - Comparar cantidad de centroides entre años
+   - Identificar APs con mayor expansión de asentamientos
+
+================================================================================
+HISTÓRICO DE VERSIONES
+================================================================================
+
+v1.0 (2025-01-XX)
+  - Versión inicial
+  - Procesamiento de rásteres de asentamientos
+  - Generación de centroides por AP
+  - Herencia de atributos de APs
+
+================================================================================
+"""
+
+import arcpy
+from arcpy.sa import *
+import numpy as np
+import os
+import time
+
+arcpy.CheckOutExtension("Spatial")
+
+# ---------------------------------
+# CONFIGURACIÓN DE RUTAS
+# ---------------------------------
+# Reemplaza estas rutas según tu estructura de directorios
+RASTER_FOLDER = r"C:\ruta\a\tus\rasters"  # Carpeta con los rásteres de asentamientos
+RASTER_PATTERN = "*.tif"  # Patrón de búsqueda para los archivos ráster
+
+BUFFER_SHAPEFILE = r"C:\ruta\a\tu\buffer_10km.shp"  # Shapefile de áreas protegidas con buffer
+OUTPUT_FOLDER = r"C:\ruta\a\tu\output\centroides"  # Carpeta de salida
+
+SR_DESTINO = arcpy.SpatialReference(32719)  # EPSG:32719 (WGS84 UTM Zone 19S)
+arcpy.env.overwriteOutput = True
+
+# ---------------------------------
+# CAMPOS A COPIAR DEL SHAPEFILE
+# ---------------------------------
+campos_ap = [
+    "NOMBRE_TOT", "CATEGORIA", "NOMBRE_UNI", "REGION",
+    "PROVINCIA", "COMUNA", "DECRETO_VI", "ANIO_CREAC",
+    "CAT_PREV", "CAMB_SUP", "AREA_HA", "PRIM_METR",
+    "LONGITUD", "LATITUD", "ALT_MIN", "ALT_MAX",
+    "ALT_MEAN", "ALT_MED", "ALT_STD", "ORIG_FID"
+]
+
+# Mapeo de tipos de datos ArcGIS a tipos de feature class
+tipo_map = {"String": "TEXT", "Double": "DOUBLE", "Integer": "LONG", "SmallInteger": "SHORT"}
+
+# ---------------------------------
+# OBTENER LISTA DE RÁSTERES
+# ---------------------------------
+if not os.path.exists(RASTER_FOLDER):
+    print(f"ERROR: La carpeta de rásteres no existe: {RASTER_FOLDER}")
+    exit()
+
+rasters = []
+for file in os.listdir(RASTER_FOLDER):
+    if file.endswith('.tif') or file.endswith('.TIF'):
+        rasters.append(os.path.join(RASTER_FOLDER, file))
+
+if not rasters:
+    print("ERROR: No se encontraron archivos .tif en la carpeta especificada")
+    exit()
+
+print(f"Se encontraron {len(rasters)} rásteres para procesar")
+
+# ---------------------------------
+# LOOP POR CADA RÁSTER
+# ---------------------------------
+for raster_path in rasters:
+
+    arcpy.ClearWorkspaceCache_management()
+    arcpy.env.workspace = None
+
+    # Obtener año del nombre del archivo (adaptar según tu nomenclatura)
+    filename = os.path.basename(raster_path)
+    año = filename.split("_")[1].split(".")[0]  # Ajusta según tu patrón de nombres
+
+    print("\n==============================")
+    print(f" PROCESANDO AÑO {año}")
+    print("==============================")
+
+    t_total = time.time()
+
+    # ---------------------------------
+    # CREAR CARPETA AÑO
+    # ---------------------------------
+    carpeta_año = os.path.join(OUTPUT_FOLDER, f"centroides_{año}")
+
+    # Eliminar carpeta completa si existe (incluye GDB)
+    if arcpy.Exists(carpeta_año):
+        arcpy.management.Delete(carpeta_año)
+        time.sleep(1)
+
+    os.makedirs(carpeta_año)
+
+    # ---------------------------------
+    # CREAR GEODATABASE
+    # ---------------------------------
+    gdb_name = f"centroides_{año}.gdb"
+    gdb = os.path.join(carpeta_año, gdb_name)
+
+    arcpy.management.CreateFileGDB(carpeta_año, gdb_name)
+
+    base_name = f"Centroid_{año}_10KM_AP"
+    output_fc = os.path.join(gdb, base_name)
+
+    # ---------------------------------
+    # CREAR FEATURE CLASS
+    # ---------------------------------
+    arcpy.management.CreateFeatureclass(
+        gdb,
+        base_name,
+        "POINT",
+        spatial_reference=SR_DESTINO
+    )
+
+    arcpy.management.AddField(output_fc, "CENT_ID", "LONG")
+
+    # Copiar campos del shapefile de áreas protegidas
+    for f in arcpy.ListFields(BUFFER_SHAPEFILE):
+        if f.name in campos_ap and f.type not in ["OID", "Geometry"]:
+            tipo = tipo_map.get(f.type, "TEXT")
+            arcpy.management.AddField(output_fc, f.name, tipo, field_length=f.length)
+
+    print("Feature class creada exitosamente")
+
+    # ---------------------------------
+    # PROCESAR CADA POLÍGONO
+    # ---------------------------------
+    n_total = int(arcpy.management.GetCount(BUFFER_SHAPEFILE).getOutput(0))
+
+    campos_cursor = ["SHAPE@"] + campos_ap
+    campos_insert = ["SHAPE@XY", "CENT_ID"] + campos_ap
+
+    puntos_totales = 0
+    cent_id = 1
+
+    insert_cursor = arcpy.da.InsertCursor(output_fc, campos_insert)
+
+    with arcpy.da.SearchCursor(BUFFER_SHAPEFILE, campos_cursor) as cursor:
+        for idx, row in enumerate(cursor):
+
+            geom = row[0]
+            attrs = [a if a is not None else "" for a in list(row[1:])]
+            nombre = attrs[0] if attrs[0] else f"AP_{idx}"
+
+            clip_raster = f"in_memory\\clip_{idx}"
+
+            try:
+                ext = geom.extent
+
+                # Recortar ráster según la extensión del polígono
+                arcpy.management.Clip(
+                    in_raster=raster_path,
+                    rectangle=f"{ext.XMin} {ext.YMin} {ext.XMax} {ext.YMax}",
+                    out_raster=clip_raster,
+                    in_template_dataset=geom,
+                    clipping_geometry="ClippingGeometry",
+                    maintain_clipping_extent="NO_MAINTAIN_EXTENT"
+                )
+
+                # Convertir ráster a array de NumPy
+                arr = arcpy.RasterToNumPyArray(clip_raster, nodata_to_value=0)
+
+                # Si existen píxeles clasificados (valor 1)
+                if np.any(arr == 1):
+
+                    desc = arcpy.Describe(clip_raster)
+                    ext2 = desc.extent
+                    cellsize = desc.meanCellWidth
+
+                    # Obtener índices de píxeles clasificados
+                    filas_idx, cols_idx = np.where(arr == 1)
+
+                    # Convertir índices a coordenadas XY
+                    xs = ext2.XMin + (cols_idx + 0.5) * cellsize
+                    ys = ext2.YMax - (filas_idx + 0.5) * cellsize
+
+                    # Insertar cada centroide en la feature class
+                    for i in range(len(xs)):
+                        insert_cursor.insertRow(
+                            [(float(xs[i]), float(ys[i])), cent_id] + attrs
+                        )
+                        cent_id += 1
+
+                    puntos_totales += len(xs)
+
+                # Limpieza periódica de caché
+                if idx % 20 == 0:
+                    arcpy.ClearWorkspaceCache_management()
+
+                print(f"   [{idx+1}/{n_total}] {nombre} — Total: {puntos_totales:,}")
+
+            except Exception as e:
+                print(f"   [{idx+1}/{n_total}] {nombre} — ERROR: {e}")
+
+    del insert_cursor
+
+    print(f"\n AÑO {año} COMPLETO — {puntos_totales:,} puntos generados")
+    print(f" Tiempo de procesamiento: {time.time()-t_total:.1f}s")
+    print(f" Salida: {output_fc}")
+
+print("\n" + "="*50)
+print(" PROCESAMIENTO FINALIZADO")
+print("="*50)
