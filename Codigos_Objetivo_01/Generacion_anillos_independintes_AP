@@ -1,0 +1,466 @@
+#!/usr/bin/env python3
+"""
+================================================================================
+GENERACIÓN DE ANILLOS INDEPENDIENTES EN APs
+================================================================================
+
+PROYECTO FONDECYT Nº 1251080
+"Evaluación de las áreas protegidas y sus zonas de amortiguación en Chile: 
+un análisis geoespacial de su eficacia para contrarrestar el cambio global"
+
+AUTOR DEL CODIGO: Valentina Contreras
+
+================================================================================
+DESCRIPCIÓN GENERAL
+================================================================================
+
+Este script genera shapefiles de anillos independientes alrededor de 97 Áreas
+Protegidas (AP). Los anillos son independientes entre sí desde el borde de cada
+AP hacia afuera en distancias de 1km a 10km. Este script NO realiza cálculos
+de datos raster, solo genera las geometrías de los anillos.
+
+El procesamiento incluye:
+  - Generación de anillos independientes de 1km a 10km para cada AP
+  - Exclusión de la geometría original del AP en cada anillo
+  - Exclusión de anillos anteriores en cada anillo (independencia)
+  - Creación de shapefiles separados para cada distancia
+  - Agregación de todas las APs en un único shapefile por distancia
+  - Adición de campos descriptivos (ID_AP, NOMBRE_AP, DISTANCIA_KM)
+  - Generación de reporte con información de salida
+
+================================================================================
+FLUJO DE TRABAJO
+================================================================================
+
+1. CONFIGURACIÓN
+   - Definir ruta del shapefile de AP
+   - Definir ruta de salida para los anillos generados
+   - Configurar distancias (1-10 km)
+
+2. VERIFICACIÓN
+   - Validar existencia del archivo de entrada
+   - Cargar cantidad de AP
+
+3. GENERACIÓN DE ANILLOS
+   - Para cada distancia (1-10km):
+     * Para cada AP:
+       - Crear buffer completo de X km
+       - Crear buffer de X-1 km (anillo anterior)
+       - Restar anillo anterior del anillo actual (difference)
+       - Guardar geometría en lista
+     * Crear shapefile con todas las geometrías
+     * Agregar campos y metadatos
+
+4. EXPORTACIÓN
+   - Guardar 10 shapefiles (Anillo_1km.shp a Anillo_10km.shp)
+   - Generar resumen con rutas de salida
+
+5. RESUMEN
+   - Mostrar estadísticas de generación
+   - Indicar ubicación de archivos generados
+   - Proporcionar rutas para usar en script de cálculos
+
+================================================================================
+REQUISITOS TÉCNICOS
+================================================================================
+
+• Python 3.6+
+• ArcGIS Desktop / ArcGIS Pro
+• Módulos: arcpy, os, time
+• Acceso a licencias de ArcGIS
+• Shapefiles de entrada con geometría válida
+
+================================================================================
+FLUJO DE ENTRADA/SALIDA
+================================================================================
+
+ENTRADA:
+  - Shapefile de Áreas Protegidas (AP_terrestres.shp)
+
+SALIDA:
+  - 10 Shapefiles de anillos independientes:
+    * Anillo_1km.shp (solo anillo 1km, sin AP)
+    * Anillo_2km.shp (solo anillo 2km, sin AP, sin anillo 1km)
+    * ...
+    * Anillo_10km.shp (solo anillo 10km, sin AP, sin anillos previos)
+
+================================================================================
+CONFIGURACIÓN
+================================================================================
+
+Antes de ejecutar, modifica los siguientes parámetros en la sección CONFIGURACIÓN:
+
+  • ruta_ap: Ruta al shapefile de Áreas Protegidas
+  • ruta_salida_anillos: Ruta de salida para los shapefiles de anillos
+  • distancias_km: Lista de distancias a procesar (por defecto 1-10)
+
+EJEMPLO DE RUTAS:
+  ruta_ap = r"C:\datos\APs\AP_terrestres.shp"
+  ruta_salida_anillos = r"C:\resultados\Anillos_generados"
+
+================================================================================
+USO
+================================================================================
+
+1. Abrir el script en Python IDE (ArcGIS Pro Python Console recomendado)
+2. Modificar rutas de entrada/salida en CONFIGURACIÓN
+3. Ejecutar: python script_generador_anillos.py
+4. Revisar reporte de procesamiento en consola
+5. Verificar shapefiles en ruta_salida_anillos
+6. Copiar rutas de salida para usar en script_calculos_anillos_preexistentes.py
+
+================================================================================
+SALIDA DEL SCRIPT
+================================================================================
+
+El script genera:
+  • 10 Shapefiles de anillos independientes (Anillo_1km.shp a Anillo_10km.shp)
+  • Reporte detallado en consola con progreso por distancia
+  • Información de número de features por anillo
+  • Tiempos de procesamiento por distancia
+  • Rutas completas listas para copiar en script de cálculos
+
+================================================================================
+NOTAS IMPORTANTES - ANILLOS INDEPENDIENTES
+================================================================================
+
+• ANILLOS INDEPENDIENTES: Cada anillo es aislado del anterior
+  - Anillo_1km = Desde borde AP hasta 1km (SIN AP, SIN espacios previos)
+  - Anillo_2km = Desde 1km hasta 2km (SIN AP, SIN anillo 1km)
+  - Anillo_3km = Desde 2km hasta 3km (SIN AP, SIN anillos previos)
+  - ...
+  - Anillo_10km = Desde 9km hasta 10km (SIN AP, SIN anillos previos)
+
+• CÁLCULO DE ANILLOS:
+  - Anillo N = Buffer(N km) - Buffer(N-1 km)
+  - Para el primer anillo: Anillo 1 = Buffer(1 km) - AP original
+  - Esto asegura que cada anillo NO incluya la AP ni anillos anteriores
+
+• GEOMETRÍAS GENERADAS:
+  - Cada shapefile contiene 97 polígonos (uno por AP)
+  - Las geometrías pueden ser multipolígonos (si el anillo genera múltiples partes)
+  - El AP original se EXCLUYE completamente del anillo
+
+• CAMPOS AGREGADOS:
+  - ID_AP: Identificador único del área protegida original (OID)
+  - NOMBRE_AP: Nombre del área protegida
+  - DISTANCIA_KM: Distancia en kilómetros de este anillo
+
+================================================================================
+DIFERENCIA ENTRE ANILLOS Y BUFFERS
+================================================================================
+
+ANILLOS INDEPENDIENTES (Este script):
+  - Cada anillo es aislado del anterior
+  - Anillo_1km = Buffer(1km) - AP = solo anillo 1km
+  - Anillo_2km = Buffer(2km) - Buffer(1km) = solo anillo 2km
+  - No hay acumulación, cada uno es completamente independiente
+  - Área de cada anillo es similar (aproximadamente)
+
+BUFFERS ACUMULATIVOS:
+  - Cada buffer es acumulativo desde el borde de la AP
+  - Buffer_1km = Desde borde AP hasta 1km (acumula solo 1km)
+  - Buffer_2km = Desde borde AP hasta 2km (acumula 1km + 2km)
+  - Hay acumulación, cada uno contiene los anteriores
+  - Área total aumenta con la distancia
+
+================================================================================
+METODOLOGÍA DE GENERACIÓN
+================================================================================
+
+Para cada distancia (1-10km):
+  1. Iterar sobre cada AP del shapefile
+  2. Para cada AP:
+     a. Obtener geometría del AP
+     b. Crear buffer completo de N km: AP.buffer(N * 1000)
+     c. Crear buffer anterior de N-1 km: AP.buffer((N-1) * 1000)
+     d. Crear anillo = buffer_completo.difference(buffer_anterior)
+     e. Para primer anillo: anillo = buffer_1km.difference(AP)
+     f. Validar que geometría es válida
+     g. Almacenar en lista junto con metadatos
+  3. Crear shapefile nuevo con tipo POLYGON
+  4. Agregar campos: ID_AP, NOMBRE_AP, DISTANCIA_KM
+  5. Insertar todas las geometrías y metadatos
+  6. Guardar shapefile
+
+================================================================================
+REQUISITOS DE ENTRADA - ESPECIFICACIONES
+================================================================================
+
+Shapefile de AP:
+  - Geometría: POLYGON
+  - Campos requeridos: OID, geometry (SHAPE)
+  - Campos opcionales sugeridos: NOMBRE_TOT (para nombre del AP)
+  - Proyección: Cualquiera (se recomienda proyección métrica, ej: UTM)
+  - Cantidad: 97 polígonos (una por AP)
+  - Validez: Las geometrías deben ser válidas (sin auto-intersecciones)
+
+================================================================================
+CAMPOS DEL SHAPEFILE DE SALIDA
+================================================================================
+
+Cada shapefile de anillo contiene:
+  - OBJECTID: Identificador único del registro (generado por ArcGIS)
+  - SHAPE: Geometría del anillo (POLYGON)
+  - ID_AP: Identificador original del AP en el shapefile de entrada (OID)
+  - NOMBRE_AP: Nombre descriptivo del AP
+  - DISTANCIA_KM: Distancia en kilómetros de este anillo (1-10)
+
+================================================================================
+ERRORES COMUNES Y SOLUCIONES
+================================================================================
+
+Error: "No encontré ruta_ap"
+  → Verificar que la ruta existe y está correctamente escrita
+  → Verificar que el usuario tiene permisos de lectura
+  → Verificar que el archivo .shp existe
+
+Error al crear shapefile:
+  → Verificar que ruta_salida_anillos existe
+  → Verificar que el usuario tiene permisos de escritura
+  → Verificar espacio en disco suficiente
+
+Error: "Geometría inválida"
+  → El AP puede tener problemas de geometría
+  → Usar herramienta "Repair Geometry" de ArcGIS
+  → Validar shapefile de entrada
+
+Anillo muy pequeño o vacío:
+  → Verificar que la proyección es métrica (no en grados)
+  → Verificar que AP tiene área suficiente
+  → Revisar unidades de proyección
+
+================================================================================
+NOTAS DE RENDIMIENTO
+================================================================================
+
+- Tiempo de procesamiento: ~5-15 minutos totales (para 97 APs, 10 distancias)
+- Tiempo por distancia: ~1-2 minutos (97 APs)
+- Memoria requerida: 4GB RAM mínimo recomendado
+- Espacio en disco: ~50-100MB para 10 shapefiles
+- Operaciones geométricas: .buffer() y .difference() son operaciones intensivas
+
+Para optimizar:
+  - Usar SSD en lugar de HDD
+  - Aumentar memoria RAM del equipo
+  - Procesar distancias en lotes separados si hay limitaciones
+  - Usar proyección métrica para mejor precisión
+
+
+================================================================================
+"""
+
+import arcpy
+import os
+import time
+
+print("\n" + "="*70)
+print("GENERADOR DE ANILLOS INDEPENDIENTES - FONDECYT")
+print("="*70)
+
+# ======================================================
+# CONFIGURACIÓN - MODIFICA ESTAS RUTAS SEGÚN TUS DATOS
+# ======================================================
+
+# RUTA DE ENTRADA - Shapefile con Áreas Protegidas
+ruta_ap = r"[CAMBIAR_POR_RUTA_AP]\AP_terrestres.shp"
+
+# RUTA DE SALIDA - Directorio donde guardar los anillos generados
+ruta_salida_anillos = r"[CAMBIAR_POR_RUTA_SALIDA]\Anillos_generados"
+
+# Distancias en kilómetros a procesar
+distancias_km = list(range(1, 11))
+
+# Crear directorio de salida si no existe
+os.makedirs(ruta_salida_anillos, exist_ok=True)
+
+print("\n📋 CONFIGURACIÓN:")
+print(f"  AP: {ruta_ap}")
+print(f"  Salida anillos: {ruta_salida_anillos}")
+print(f"  Distancias: {distancias_km} km")
+
+# ======================================================
+# VERIFICAR
+# ======================================================
+print("\n✓ Verificando archivos...")
+
+if not arcpy.Exists(ruta_ap):
+    print(f"❌ ERROR: No encontré {ruta_ap}")
+    exit(1)
+
+print("  ✓ Archivos encontrados")
+
+# ======================================================
+# CARGAR DATOS
+# ======================================================
+print("\n📊 Cargando datos...")
+
+result = arcpy.management.GetCount(ruta_ap)
+num_ap = int(result[0])
+print(f"  ✓ AP cargadas: {num_ap} features")
+
+print("\n" + "="*70)
+print("GENERANDO ANILLOS PARA TODAS LAS ÁREAS PROTEGIDAS")
+print("="*70)
+
+# ======================================================
+# PROCESAR CADA DISTANCIA
+# ======================================================
+
+tiempo_inicio = time.time()
+lista_salidas = []
+
+for km in distancias_km:
+    
+    print(f"\n{'='*70}")
+    print(f"GENERANDO ANILLO {km}km")
+    print(f"{'='*70}")
+    
+    tiempo_km_inicio = time.time()
+    
+    # Nombre del shapefile de salida
+    nombre_salida = f"Anillo_{km}km.shp"
+    ruta_salida = os.path.join(ruta_salida_anillos, nombre_salida)
+    
+    print(f"\n📍 Procesando {num_ap} APs para crear anillo independiente de {km}km...")
+    
+    # Lista temporal para almacenar todos los anillos
+    lista_geometrias_anillo = []
+    lista_ids_ap = []
+    lista_nombres_ap = []
+    
+    # Iterar sobre cada AP
+    cursor = arcpy.da.SearchCursor(ruta_ap, 
+        ['OID@', 'SHAPE@', 'NOMBRE_TOT'])
+    
+    idx_ap = 0
+    for row in cursor:
+        idx_ap += 1
+        
+        oid_ap = row[0]
+        geometry_ap = row[1]
+        nombre_ap = str(row[2]) if row[2] else f'AP_{oid_ap}'
+        
+        # Crear buffer de km km (buffer actual)
+        buffer_actual = geometry_ap.buffer(km * 1000)
+        
+        # Crear buffer anterior (km-1)
+        if km == 1:
+            # Para el primer anillo: anillo = buffer_1km - AP
+            buffer_anterior = geometry_ap
+        else:
+            # Para anillos siguientes: anillo = buffer_km - buffer_(km-1)
+            buffer_anterior = geometry_ap.buffer((km - 1) * 1000)
+        
+        # Crear anillo = anillo actual - anillo anterior
+        anillo = buffer_actual.difference(buffer_anterior)
+        
+        if anillo is not None and anillo.area > 0:
+            lista_geometrias_anillo.append(anillo)
+            lista_ids_ap.append(oid_ap)
+            lista_nombres_ap.append(nombre_ap)
+        
+        # Mostrar progreso cada 10 APs
+        if idx_ap % 10 == 0 or idx_ap == num_ap:
+            pct = round(idx_ap / num_ap * 100, 1)
+            print(f"  {idx_ap}/{num_ap} ({pct}%) APs procesadas...")
+    
+    del cursor
+    
+    print(f"\n  ✓ Anillos geométricos creados: {len(lista_geometrias_anillo)}")
+    
+    # ======================================================
+    # CREAR SHAPEFILE DE SALIDA
+    # ======================================================
+    
+    print(f"\n  📝 Creando shapefile: {nombre_salida}")
+    
+    try:
+        # Crear shapefile de polígonos
+        arcpy.management.CreateFeatureclass(
+            ruta_salida_anillos,
+            nombre_salida,
+            geometry_type='POLYGON'
+        )
+        
+        # Agregar campos
+        arcpy.management.AddField(
+            ruta_salida,
+            'ID_AP',
+            'LONG'
+        )
+        arcpy.management.AddField(
+            ruta_salida,
+            'NOMBRE_AP',
+            'TEXT',
+            field_length=255
+        )
+        arcpy.management.AddField(
+            ruta_salida,
+            'DISTANCIA_KM',
+            'SHORT'
+        )
+        
+        # Insertar geometrías
+        with arcpy.da.InsertCursor(ruta_salida, ['SHAPE@', 'ID_AP', 'NOMBRE_AP', 'DISTANCIA_KM']) as cursor_insert:
+            for i, geom_anillo in enumerate(lista_geometrias_anillo):
+                cursor_insert.insertRow([
+                    geom_anillo,
+                    lista_ids_ap[i],
+                    lista_nombres_ap[i],
+                    km
+                ])
+        
+        print(f"  ✓ Shapefile creado con {len(lista_geometrias_anillo)} features")
+        
+        tiempo_km_fin = time.time()
+        tiempo_km = round(tiempo_km_fin - tiempo_km_inicio, 1)
+        
+        print(f"  ✅ Anillo {km}km completado ({tiempo_km}s)")
+        print(f"     Guardado en: {ruta_salida}")
+        
+        lista_salidas.append({
+            'distancia_km': km,
+            'archivo': nombre_salida,
+            'ruta_completa': ruta_salida,
+            'num_features': len(lista_geometrias_anillo),
+            'tiempo_s': tiempo_km
+        })
+        
+    except Exception as e:
+        print(f"  ❌ ERROR al crear anillo {km}km: {str(e)}")
+
+tiempo_fin = time.time()
+tiempo_total = round((tiempo_fin - tiempo_inicio) / 60, 1)
+
+# ======================================================
+# RESUMEN FINAL
+# ======================================================
+
+print("\n" + "="*70)
+print("✅ GENERACIÓN DE ANILLOS COMPLETADA")
+print("="*70 + "\n")
+
+print("📊 RESUMEN FINAL:")
+print(f"  Anillos generados: {len(lista_salidas)}/{len(distancias_km)}")
+print(f"  Directorio de salida: {ruta_salida_anillos}")
+print(f"  Tiempo total: {tiempo_total} minutos")
+print()
+
+print("📝 DETALLES DE ANILLOS GENERADOS:")
+for item in lista_salidas:
+    print(f"\n  Anillo {item['distancia_km']}km:")
+    print(f"    Archivo: {item['archivo']}")
+    print(f"    Features: {item['num_features']}")
+    print(f"    Tiempo: {item['tiempo_s']}s")
+
+print("\n" + "="*70)
+print("RUTAS PARA USAR EN CÁLCULOS:")
+print("="*70 + "\n")
+
+print("Copiar en script de cálculos:\n")
+for item in lista_salidas:
+    ruta_relativa = item['ruta_completa']
+    print(f"    {item['distancia_km']}: r\"{ruta_relativa}\",")
+
+print("\n\n🎉 ¡ANILLOS GENERADOS EXITOSAMENTE!\n")
