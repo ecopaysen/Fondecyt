@@ -98,7 +98,7 @@ USO
 1. Abrir el script en Python IDE (ArcGIS Pro Python Console recomendado)
 2. Configurar rutas de entrada/salida
 3. Verificar que buffers preexistentes existen en las rutas especificadas
-4. Ejecutar: python script_calculos_buffers_preexistentes.py
+4. Ejecutar: python script_calculos_buffers_preexistentes_v3.py
 5. Revisar reporte de procesamiento en consola
 6. Verificar archivo CSV en ruta_csv_salida
 
@@ -132,9 +132,10 @@ NOTAS IMPORTANTES - BUFFERS ACUMULATIVOS
   - Si falta algún buffer, el script detiene la ejecución
 
 • CÁLCULO DE PORCENTAJES:
-  - ant = SOLO píxeles valor 1 (antrópico/asentamientos)
-  - otros = SOLO píxeles valor 0 (natural/vegetación)
-  - nodata (2) = se calcula pero NO se incluye en porcentajes
+  - ant% + otros% = 100% (nodata se considera implícitamente)
+  - ant = píxeles valor 1 (antrópico/asentamientos)
+  - otros = píxeles valor 0 (natural/vegetación)
+  - nodata (2) = se cuenta pero NO se incluye en división
   - Porcentaje = (ant / (ant + otros)) × 100
 
 ================================================================================
@@ -151,8 +152,8 @@ Para cada zona (AP, Buffer_1km, Buffer_2km, etc.):
   2. Convierte a array NumPy para mejor rendimiento
   3. Cuenta píxeles con valor 1 (antrópico)
   4. Cuenta píxeles con valor 0 (natural)
-  5. Cuenta píxeles con valor 2 (nodata) para referencia
-  6. Calcula porcentajes EXCLUYENDO nodata: (ant / (ant + otros)) × 100
+  5. Cuenta píxeles con valor 2 (nodata) - implícito
+  6. Calcula porcentajes: (ant / (ant + otros)) × 100
   7. Almacena en CSV junto con metadatos de la AP
 
 ================================================================================
@@ -187,31 +188,6 @@ Resultados de asentamientos (para cada distancia 1-10km):
 
 
 ================================================================================
-REQUISITOS DE ENTRADA - ESPECIFICACIONES
-================================================================================
-
-Shapefile de AP (AP_terrestres_actualizadas.shp):
-  - Geometría: POLYGON
-  - Campos requeridos: NOMBRE_TOT, CATEGORIA, REGION, ANIO_CREAC, AREA_HA,
-                       PRIM_METR, LATITUD, LONGITUD, ALT_MIN, ALT_MAX,
-                       ALT_MEAN, ALT_MED, ALT_STD
-  - Proyección: Debe ser consistente con el raster
-  - Cantidad: 97 polígonos (una por AP)
-
-Raster de asentamientos (Asen_2017.tif):
-  - Tipo: GeoTIFF
-  - Valores: 0 (natural), 1 (antrópico), 2 (nodata)
-  - Proyección: Debe coincidir con el shapefile
-  - Cobertura: Debe cubrir todas las AP y sus buffers
-  - Año: 2017 (o el año específico)
-
-Shapefiles de Buffers Preexistentes:
-  - Tipo: Geometría POLYGON
-  - Cantidad: 10 archivos (uno por cada km de 1 a 10)
-  - Proyección: Debe coincidir con shapefile de AP y raster
-  - Contenido: Geometrías de buffers acumulativos SIN AP
-
-================================================================================
 ERRORES COMUNES Y SOLUCIONES
 ================================================================================
 
@@ -240,6 +216,7 @@ CSV vacío o con pocos datos:
   → Probar con una AP individual primero
 
 
+
 ================================================================================
 NOTAS DE RENDIMIENTO
 ================================================================================
@@ -256,12 +233,8 @@ Para optimizar:
   - Reducir resolución del raster si es posible
   - Procesar en lotes más pequeños si hay limitaciones
 
-================================================================================
 
-#!/usr/bin/env python3
-"""
-SCRIPT ANÁLISIS DE ASENTAMIENTOS - BUFFERS PREEXISTENTES v3
-VERSIÓN MEJORADA CON SELECCIÓN POR LOCALIZACIÓN
+================================================================================
 """
 
 import arcpy
@@ -371,6 +344,20 @@ except:
 def calcular_porcentajes_numpy(raster_obj, geometry):
     """
     Calcula porcentajes usando NumPy directamente
+    
+    CÁLCULO CORRECTO:
+    - Total = píxeles 0 + píxeles 1 + píxeles 2 (100% del área)
+    - ant% = (píxeles 1) / (píxeles 0 + píxeles 1) × 100
+    - otros% = (píxeles 0) / (píxeles 0 + píxeles 1) × 100
+    - nodata se CUENTA en el 100% pero NO se incluye en los porcentajes
+    
+    EJEMPLO: Si hay 483 píx valor 1, 200264 píx valor 0, 35150 píx nodata(2):
+    - Total área = 483 + 200264 + 35150 = 235897 (100%)
+    - Cálculo % = 483 / (483 + 200264) = 483/200747
+    - ant% = 483/200747 × 100 = 0.24%
+    - otros% = 200264/200747 × 100 = 99.76%
+    - Suma: 0.24% + 99.76% = 100% (de los datos con información)
+    - NoData representa: 35150/235897 = 14.9% del área total
     """
     try:
         # Extraer raster a array NumPy (en memoria)
@@ -382,17 +369,17 @@ def calcular_porcentajes_numpy(raster_obj, geometry):
         # Contar valores
         count_1 = np.sum(raster_array == 1)      # Antrópico
         count_0 = np.sum(raster_array == 0)      # Natural
-        count_2 = np.sum(raster_array == 2)      # NoData
+        count_2 = np.sum(raster_array == 2)      # NoData (se cuenta pero NO se incluye en división)
         
         count_ant = count_1
         count_otros = count_0
         
-        # Total SIN contar nodata (2)
-        total = count_ant + count_otros
+        # Total para PORCENTAJE: SOLO píxeles 0 y 1 (nodata no entra en división)
+        total_para_porcentaje = count_ant + count_otros
         
-        if total > 0:
-            pct_ant = round(count_ant / total * 100, 2)
-            pct_otros = round(count_otros / total * 100, 2)
+        if total_para_porcentaje > 0:
+            pct_ant = round(count_ant / total_para_porcentaje * 100, 2)
+            pct_otros = round(count_otros / total_para_porcentaje * 100, 2)
         else:
             pct_ant = None
             pct_otros = None
