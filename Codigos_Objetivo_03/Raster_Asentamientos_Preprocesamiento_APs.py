@@ -9,9 +9,6 @@ PROYECTO FONDECYT Nº 1251080
 un análisis geoespacial de su eficacia para contrarrestar el cambio global"
 
 AUTOR: Valentina Contreras
-INSTITUCIÓN: Ecopaysen - Laboratorio de Análisis Geoespacial
-FECHA: 2025
-VERSION: 1.0
 
 ================================================================================
 DESCRIPCIÓN GENERAL
@@ -40,18 +37,6 @@ El ráster procesado contiene SOLO tres valores:
 Este esquema permite cuantificar el impacto de asentamientos humanos dentro 
 y en las zonas de amortiguación de las APs hasta 10 km de distancia.
 
-================================================================================
-CONTEXTO CIENTÍFICO
-================================================================================
-
-Las zonas de amortiguación (buffers) alrededor de las Áreas Protegidas son 
-vitales para evaluar la efectividad de la conservación. Este script genera 
-datos estandarizados para:
-
-  • Cuantificar presión antrópica en APs y sus alrededores
-  • Identificar patrones de ocupación territorial
-  • Evaluar eficacia de APs frente al cambio global
-  • Comparar datos entre diferentes regiones de Chile
 
 ================================================================================
 FLUJO DE TRABAJO
@@ -62,8 +47,6 @@ FLUJO DE TRABAJO
 3. Clonación de propiedades espaciales del original
 4. Aplicación de condicionales para reemplazo NoData → 2
 5. Normalización de valores de píxeles
-6. Guardado de ráster procesado con MISMO nombre en carpeta de salida
-7. Reporte de procesamiento completado
 
 ================================================================================
 REQUISITOS TÉCNICOS
@@ -130,15 +113,6 @@ NOTAS IMPORTANTES
 • El procesamiento puede tardar según tamaño y cantidad de rásteres
 
 ================================================================================
-REFERENCIAS
-================================================================================
-
-FONDECYT Project Nº 1251080
-https://www.fondecyt.cl/
-
-Ecopaysen - Laboratorio de Análisis Geoespacial
-
-================================================================================
 """
 
 import arcpy
@@ -150,8 +124,6 @@ from datetime import datetime
 
 print("\n" + "="*80)
 print("PROCESAMIENTO Y ESTANDARIZACIÓN DE RÁSTERES DE ASENTAMIENTOS")
-print("FONDECYT Nº 1251080 - APs y Zonas de Amortiguación en Chile")
-print("Autor: Valentina Contreras | Ecopaysen")
 print("="*80 + "\n")
 
 # ========================================
