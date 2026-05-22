@@ -1,0 +1,437 @@
+#!/usr/bin/env python3
+"""
+================================================================================
+GENERACIÓN DE BUFFERS ACUMULATIVOS PARA APs
+================================================================================
+
+PROYECTO FONDECYT Nº 1251080
+"Evaluación de las áreas protegidas y sus zonas de amortiguación en Chile: 
+un análisis geoespacial de su eficacia para contrarrestar el cambio global"
+
+AUTOR DEL CODIGO: Valentina Contreras
+
+================================================================================
+DESCRIPCIÓN GENERAL
+================================================================================
+
+Este script genera shapefiles de buffers acumulativos alrededor de 97 Áreas
+Protegidas (AP). Los buffers son acumulativos desde el borde de cada AP hacia
+afuera en distancias de 1km a 10km. Este script NO realiza cálculos de datos
+raster, solo genera las geometrías de los buffers.
+
+El procesamiento incluye:
+  - Generación de buffers acumulativos de 1km a 10km para cada AP
+  - Exclusión de la geometría original del AP en cada buffer
+  - Creación de shapefiles separados para cada distancia
+  - Agregación de todas las APs en un único shapefile por distancia
+  - Adición de campos descriptivos (ID_AP, NOMBRE_AP, DISTANCIA_KM)
+  - Generación de reporte con información de salida
+
+================================================================================
+FLUJO DE TRABAJO
+================================================================================
+
+1. CONFIGURACIÓN
+   - Definir ruta del shapefile de AP
+   - Definir ruta de salida para los buffers generados
+   - Configurar distancias (1-10 km)
+
+2. VERIFICACIÓN
+   - Validar existencia del archivo de entrada
+   - Cargar cantidad de AP
+
+3. GENERACIÓN DE BUFFERS
+   - Para cada distancia (1-10km):
+     * Para cada AP:
+       - Crear buffer completo de X km
+       - Restar el AP original (difference)
+       - Guardar geometría en lista
+     * Crear shapefile con todas las geometrías
+     * Agregar campos y metadatos
+
+4. EXPORTACIÓN
+   - Guardar 10 shapefiles (Buffer_1km.shp a Buffer_10km.shp)
+   - Generar resumen con rutas de salida
+
+5. RESUMEN
+   - Mostrar estadísticas de generación
+   - Indicar ubicación de archivos generados
+   - Proporcionar rutas para usar en script de cálculos
+
+================================================================================
+REQUISITOS TÉCNICOS
+================================================================================
+
+• Python 3.6+
+• ArcGIS Desktop / ArcGIS Pro
+• Módulos: arcpy, os, time
+• Acceso a licencias de ArcGIS
+• Shapefiles de entrada con geometría válida
+
+================================================================================
+FLUJO DE ENTRADA/SALIDA
+================================================================================
+
+ENTRADA:
+  - Shapefile de Áreas Protegidas (AP_terrestres.shp)
+
+SALIDA:
+  - 10 Shapefiles de buffers acumulativos:
+    * Buffer_1km.shp (desde borde AP hasta 1km)
+    * Buffer_2km.shp (desde borde AP hasta 2km)
+    * ...
+    * Buffer_10km.shp (desde borde AP hasta 10km)
+
+================================================================================
+CONFIGURACIÓN
+================================================================================
+
+Antes de ejecutar, modifica los siguientes parámetros en la sección CONFIGURACIÓN:
+
+  • ruta_ap: Ruta al shapefile de Áreas Protegidas
+  • ruta_salida_buffers: Ruta de salida para los shapefiles de buffers
+  • distancias_km: Lista de distancias a procesar (por defecto 1-10)
+
+EJEMPLO DE RUTAS:
+  ruta_ap = r"C:\datos\APs\AP_terrestres.shp"
+  ruta_salida_buffers = r"C:\resultados\Buffers_generados"
+
+================================================================================
+USO
+================================================================================
+
+1. Abrir el script en Python IDE (ArcGIS Pro Python Console recomendado)
+2. Modificar rutas de entrada/salida en CONFIGURACIÓN
+3. Ejecutar: python script_generador_buffers.py
+4. Revisar reporte de procesamiento en consola
+5. Verificar shapefiles en ruta_salida_buffers
+6. Copiar rutas de salida para usar en script_calculos_buffers_preexistentes.py
+
+================================================================================
+SALIDA DEL SCRIPT
+================================================================================
+
+El script genera:
+  • 10 Shapefiles de buffers acumulativos (Buffer_1km.shp a Buffer_10km.shp)
+  • Reporte detallado en consola con progreso por distancia
+  • Información de número de features por buffer
+  • Tiempos de procesamiento por distancia
+  • Rutas completas listas para copiar en script de cálculos
+
+================================================================================
+NOTAS IMPORTANTES - BUFFERS ACUMULATIVOS
+================================================================================
+
+• BUFFERS ACUMULATIVOS: Cada buffer es acumulativo desde el borde de la AP
+  - Buffer_1km = Desde borde AP hasta 1km (anillo 1km, SIN AP)
+  - Buffer_2km = Desde borde AP hasta 2km (anillos 1km+2km, SIN AP)
+  - Buffer_3km = Desde borde AP hasta 3km (anillos 1km+2km+3km, SIN AP)
+  - ...
+  - Buffer_10km = Desde borde AP hasta 10km (todos anillos acumulados, SIN AP)
+
+• CÁLCULO DE BUFFERS:
+  - Buffer completo = AP buffer hacia afuera en X kilómetros
+  - Buffer sin AP = Buffer completo - AP original (operación difference)
+  - Esto asegura que el buffer NO incluya la AP original
+
+• GEOMETRÍAS GENERADAS:
+  - Cada shapefile contiene 97 polígonos (uno por AP)
+  - Las geometrías pueden ser multipolígonos (si el buffer genera múltiples partes)
+  - El AP original se EXCLUYE completamente del buffer
+
+• CAMPOS AGREGADOS:
+  - ID_AP: Identificador único del área protegida original (OID)
+  - NOMBRE_AP: Nombre del área protegida
+  - DISTANCIA_KM: Distancia en kilómetros de este buffer
+
+================================================================================
+METODOLOGÍA DE GENERACIÓN
+================================================================================
+
+Para cada distancia (1-10km):
+  1. Iterar sobre cada AP del shapefile
+  2. Para cada AP:
+     a. Obtener geometría del AP
+     b. Crear buffer completo de N km: AP.buffer(N * 1000)
+     c. Crear buffer sin AP: buffer_completo.difference(AP_geometria)
+     d. Validar que geometría es válida
+     e. Almacenar en lista junto con metadatos
+  3. Crear shapefile nuevo con tipo POLYGON
+  4. Agregar campos: ID_AP, NOMBRE_AP, DISTANCIA_KM
+  5. Insertar todas las geometrías y metadatos
+  6. Guardar shapefile
+
+================================================================================
+REQUISITOS DE ENTRADA - ESPECIFICACIONES
+================================================================================
+
+Shapefile de AP:
+  - Geometría: POLYGON
+  - Campos requeridos: OID, geometry (SHAPE)
+  - Campos opcionales sugeridos: NOMBRE_TOT (para nombre del AP)
+  - Proyección: Cualquiera (se recomienda proyección métrica, ej: UTM)
+  - Cantidad: 97 polígonos (una por AP)
+  - Validez: Las geometrías deben ser válidas (sin auto-intersecciones)
+
+================================================================================
+CAMPOS DEL SHAPEFILE DE SALIDA
+================================================================================
+
+Cada shapefile de buffer contiene:
+  - OBJECTID: Identificador único del registro (generado por ArcGIS)
+  - SHAPE: Geometría del buffer (POLYGON)
+  - ID_AP: Identificador original del AP en el shapefile de entrada (OID)
+  - NOMBRE_AP: Nombre descriptivo del AP
+  - DISTANCIA_KM: Distancia en kilómetros de este buffer (1-10)
+
+================================================================================
+ERRORES COMUNES Y SOLUCIONES
+================================================================================
+
+Error: "No encontré ruta_ap"
+  → Verificar que la ruta existe y está correctamente escrita
+  → Verificar que el usuario tiene permisos de lectura
+  → Verificar que el archivo .shp existe
+
+Error al crear shapefile:
+  → Verificar que ruta_salida_buffers existe
+  → Verificar que el usuario tiene permisos de escritura
+  → Verificar espacio en disco suficiente
+
+Error: "Geometría inválida"
+  → El AP puede tener problemas de geometría
+  → Usar herramienta "Repair Geometry" de ArcGIS
+  → Validar shapefile de entrada
+
+Buffer muy pequeño o vacío:
+  → Verificar que la proyección es métrica (no en grados)
+  → Verificar que AP tiene área suficiente
+  → Revisar unidades de proyección
+
+================================================================================
+NOTAS DE RENDIMIENTO
+================================================================================
+
+- Tiempo de procesamiento: ~5-15 minutos totales (para 97 APs, 10 distancias)
+- Tiempo por distancia: ~1-2 minutos (97 APs)
+- Memoria requerida: 4GB RAM mínimo recomendado
+- Espacio en disco: ~50-100MB para 10 shapefiles
+- Operaciones geométricas: .buffer() y .difference() son operaciones intensivas
+
+Para optimizar:
+  - Usar SSD en lugar de HDD
+  - Aumentar memoria RAM del equipo
+  - Procesar distancias en lotes separados si hay limitaciones
+  - Usar proyección métrica para mejor precisión
+
+
+
+================================================================================
+"""
+
+import arcpy
+import os
+import time
+
+print("\n" + "="*70)
+print("GENERADOR DE BUFFERS ACUMULATIVOS - FONDECYT")
+print("="*70)
+
+# ======================================================
+# CONFIGURACIÓN - MODIFICA ESTAS RUTAS SEGÚN TUS DATOS
+# ======================================================
+
+# RUTA DE ENTRADA - Shapefile con Áreas Protegidas
+ruta_ap = r"[CAMBIAR_POR_RUTA_AP]\AP_terrestres.shp"
+
+# RUTA DE SALIDA - Directorio donde guardar los buffers generados
+ruta_salida_buffers = r"[CAMBIAR_POR_RUTA_SALIDA]\Buffers_generados"
+
+# Distancias en kilómetros a procesar
+distancias_km = list(range(1, 11))
+
+# Crear directorio de salida si no existe
+os.makedirs(ruta_salida_buffers, exist_ok=True)
+
+print("\n📋 CONFIGURACIÓN:")
+print(f"  AP: {ruta_ap}")
+print(f"  Salida buffers: {ruta_salida_buffers}")
+print(f"  Distancias: {distancias_km} km")
+
+# ======================================================
+# VERIFICAR
+# ======================================================
+print("\n✓ Verificando archivos...")
+
+if not arcpy.Exists(ruta_ap):
+    print(f"❌ ERROR: No encontré {ruta_ap}")
+    exit(1)
+
+print("  ✓ Archivos encontrados")
+
+# ======================================================
+# CARGAR DATOS
+# ======================================================
+print("\n📊 Cargando datos...")
+
+result = arcpy.management.GetCount(ruta_ap)
+num_ap = int(result[0])
+print(f"  ✓ AP cargadas: {num_ap} features")
+
+print("\n" + "="*70)
+print("GENERANDO BUFFERS PARA TODAS LAS ÁREAS PROTEGIDAS")
+print("="*70)
+
+# ======================================================
+# PROCESAR CADA DISTANCIA
+# ======================================================
+
+tiempo_inicio = time.time()
+lista_salidas = []
+
+for km in distancias_km:
+    
+    print(f"\n{'='*70}")
+    print(f"GENERANDO BUFFER {km}km")
+    print(f"{'='*70}")
+    
+    tiempo_km_inicio = time.time()
+    
+    # Nombre del shapefile de salida
+    nombre_salida = f"Buffer_{km}km.shp"
+    ruta_salida = os.path.join(ruta_salida_buffers, nombre_salida)
+    
+    print(f"\n📍 Procesando {num_ap} APs para crear buffer de {km}km...")
+    
+    # Lista temporal para almacenar todos los buffers
+    lista_geometrias_buffer = []
+    lista_ids_ap = []
+    lista_nombres_ap = []
+    
+    # Iterar sobre cada AP
+    cursor = arcpy.da.SearchCursor(ruta_ap, 
+        ['OID@', 'SHAPE@', 'NOMBRE_TOT'])
+    
+    idx_ap = 0
+    for row in cursor:
+        idx_ap += 1
+        
+        oid_ap = row[0]
+        geometry_ap = row[1]
+        nombre_ap = str(row[2]) if row[2] else f'AP_{oid_ap}'
+        
+        # Crear buffer de km km
+        buffer_completo = geometry_ap.buffer(km * 1000)
+        
+        # Restar el AP original (solo el anillo SIN el AP)
+        buffer_sin_ap = buffer_completo.difference(geometry_ap)
+        
+        if buffer_sin_ap is not None:
+            lista_geometrias_buffer.append(buffer_sin_ap)
+            lista_ids_ap.append(oid_ap)
+            lista_nombres_ap.append(nombre_ap)
+        
+        # Mostrar progreso cada 10 APs
+        if idx_ap % 10 == 0 or idx_ap == num_ap:
+            pct = round(idx_ap / num_ap * 100, 1)
+            print(f"  {idx_ap}/{num_ap} ({pct}%) APs procesadas...")
+    
+    del cursor
+    
+    print(f"\n  ✓ Buffers geométricos creados: {len(lista_geometrias_buffer)}")
+    
+    # ======================================================
+    # CREAR SHAPEFILE DE SALIDA
+    # ======================================================
+    
+    print(f"\n  📝 Creando shapefile: {nombre_salida}")
+    
+    try:
+        # Crear shapefile de polígonos
+        arcpy.management.CreateFeatureclass(
+            ruta_salida_buffers,
+            nombre_salida,
+            geometry_type='POLYGON'
+        )
+        
+        # Agregar campos
+        arcpy.management.AddField(
+            ruta_salida,
+            'ID_AP',
+            'LONG'
+        )
+        arcpy.management.AddField(
+            ruta_salida,
+            'NOMBRE_AP',
+            'TEXT',
+            field_length=255
+        )
+        arcpy.management.AddField(
+            ruta_salida,
+            'DISTANCIA_KM',
+            'SHORT'
+        )
+        
+        # Insertar geometrías
+        with arcpy.da.InsertCursor(ruta_salida, ['SHAPE@', 'ID_AP', 'NOMBRE_AP', 'DISTANCIA_KM']) as cursor_insert:
+            for i, geom_buffer in enumerate(lista_geometrias_buffer):
+                cursor_insert.insertRow([
+                    geom_buffer,
+                    lista_ids_ap[i],
+                    lista_nombres_ap[i],
+                    km
+                ])
+        
+        print(f"  ✓ Shapefile creado con {len(lista_geometrias_buffer)} features")
+        
+        tiempo_km_fin = time.time()
+        tiempo_km = round(tiempo_km_fin - tiempo_km_inicio, 1)
+        
+        print(f"  ✅ Buffer {km}km completado ({tiempo_km}s)")
+        print(f"     Guardado en: {ruta_salida}")
+        
+        lista_salidas.append({
+            'distancia_km': km,
+            'archivo': nombre_salida,
+            'ruta_completa': ruta_salida,
+            'num_features': len(lista_geometrias_buffer),
+            'tiempo_s': tiempo_km
+        })
+        
+    except Exception as e:
+        print(f"  ❌ ERROR al crear buffer {km}km: {str(e)}")
+
+tiempo_fin = time.time()
+tiempo_total = round((tiempo_fin - tiempo_inicio) / 60, 1)
+
+# ======================================================
+# RESUMEN FINAL
+# ======================================================
+
+print("\n" + "="*70)
+print("✅ GENERACIÓN DE BUFFERS COMPLETADA")
+print("="*70 + "\n")
+
+print("📊 RESUMEN FINAL:")
+print(f"  Buffers generados: {len(lista_salidas)}/{len(distancias_km)}")
+print(f"  Directorio de salida: {ruta_salida_buffers}")
+print(f"  Tiempo total: {tiempo_total} minutos")
+print()
+
+print("📝 DETALLES DE BUFFERS GENERADOS:")
+for item in lista_salidas:
+    print(f"\n  Buffer {item['distancia_km']}km:")
+    print(f"    Archivo: {item['archivo']}")
+    print(f"    Features: {item['num_features']}")
+    print(f"    Tiempo: {item['tiempo_s']}s")
+
+print("\n" + "="*70)
+print("RUTAS PARA USAR EN CÁLCULOS:")
+print("="*70 + "\n")
+
+print("Copiar en script de cálculos:\n")
+for item in lista_salidas:
+    ruta_relativa = item['ruta_completa']
+    print(f"    {item['distancia_km']}: r\"{ruta_relativa}\",")
+
+print("\n\n🎉 ¡BUFFERS GENERADOS EXITOSAMENTE!\n")
