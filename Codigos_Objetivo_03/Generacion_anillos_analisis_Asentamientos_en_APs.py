@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 ================================================================================
-TITULO 
+GENERACION DE ANILLOS PARA EL ANALISIS DE ASENTAMIENTOS EN APs
 ================================================================================
 
 PROYECTO FONDECYT Nº 1251080
 "Evaluación de las áreas protegidas y sus zonas de amortiguación en Chile: 
 un análisis geoespacial de su eficacia para contrarrestar el cambio global"
 
-AUTOR: Valentina Contreras
+AUTOR DEL CODIGO: Valentina Contreras
 
 ================================================================================
 DESCRIPCIÓN GENERAL
