@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ================================================================================
-GENERACION DE BUFFERS PARA EL ANALISIS DE ASENTAMIENTOS EN APs
+ANÁLISIS DE ASENTAMIENTOS EN ÁREAS PROTEGIDAS USANDO BUFFERS PREEXISTENTES
 ================================================================================
 
 PROYECTO FONDECYT Nº 1251080
@@ -14,16 +14,17 @@ AUTOR DEL CODIGO: Valentina Contreras
 DESCRIPCIÓN GENERAL
 ================================================================================
 
-Este script realiza análisis de datos de asentamientos y genera/exporta buffers
-acumulativos alrededor de 97 Áreas Protegidas (AP). Calcula porcentajes de
-píxeles antrópicos y naturales para cada zona de análisis.
+Este script realiza análisis de datos de asentamientos calculando porcentajes
+de píxeles antrópicos y naturales en 97 Áreas Protegidas (AP) y sus buffers
+acumulativos preexistentes. A diferencia del script generador, este NO crea
+buffers, sino que trabaja con shapefiles de buffers ya generados.
 
 El procesamiento incluye:
   - Análisis de AP sin modificación
-  - Generación de buffers acumulativos de 1km a 10km
+  - Cálculo de porcentajes sobre buffers acumulativos preexistentes (1-10km)
   - Cálculo de porcentajes de asentamientos (ant) vs natural (otros)
   - Exportación de resultados a CSV
-  - Exportación opcional de shapefiles de buffers
+  - Generación de resumen estadístico
 
 ================================================================================
 FLUJO DE TRABAJO
@@ -31,19 +32,19 @@ FLUJO DE TRABAJO
 
 1. CONFIGURACIÓN
    - Definir rutas de entrada (shapefile de AP, raster de asentamientos)
+   - Definir rutas de buffers preexistentes (1-10km)
    - Definir ruta de salida (CSV con resultados)
-   - Configurar opción de exportar shapefiles de buffers
 
 2. VERIFICACIÓN
    - Validar existencia de archivos de entrada
+   - Verificar que todos los buffers existen
    - Cargar cantidad de AP
 
 3. PROCESAMIENTO POR AP
    - Para cada AP:
      * Analizar AP sin modificación
-     * Generar buffers acumulativos (1-10km)
-     * Calcular porcentajes de cobertura antrópica
-     * Exportar shapefiles si está habilitado
+     * Calcular porcentajes en cada buffer preexistente (1-10km)
+     * Exportar resultados a diccionario
 
 4. EXPORTACIÓN
    - Guardar resultados en CSV con formato tabulado
@@ -52,6 +53,7 @@ FLUJO DE TRABAJO
 5. RESUMEN
    - Mostrar estadísticas finales
    - Indicar ubicación de archivos de salida
+   - Mostrar primeras 5 APs procesadas
 
 ================================================================================
 REQUISITOS TÉCNICOS
@@ -59,9 +61,10 @@ REQUISITOS TÉCNICOS
 
 • Python 3.6+
 • ArcGIS Desktop / ArcGIS Pro (con extensión Spatial Analyst)
-• Módulos: arcpy, os, csv, numpy
+• Módulos: arcpy, os, csv, numpy, time
 • Acceso a licencias de ArcGIS
 • Rásteres de entrada en formato GeoTIFF
+• Shapefiles de buffers preexistentes (1-10km)
 
 ================================================================================
 FLUJO DE ENTRADA/SALIDA
@@ -69,23 +72,24 @@ FLUJO DE ENTRADA/SALIDA
 
 ENTRADA:
   - Shapefile de Áreas Protegidas (AP_terrestres_actualizadas.shp)
-  - Raster de asentamientos (Asen_buf_2015_modificado.tif)
+  - Raster de asentamientos (Asen_2017.tif)
+  - 10 Shapefiles de buffers preexistentes (Buffer_1km_clip.shp a Buffer_10km_clip.shp)
 
 SALIDA:
-  - CSV con resultados de análisis (resultados_buffers.csv)
-  - Shapefiles de buffers (opcional, en carpeta BUFFERS_SHAPEFILES)
+  - CSV con resultados de análisis (resultados_buffer_2017.csv)
 
 ================================================================================
 CONFIGURACIÓN
 ================================================================================
 
-Antes de ejecutar, modifica los siguientes parámetros:
+Antes de ejecutar, verifica los siguientes parámetros:
 
   • ruta_ap: Ruta al shapefile de Áreas Protegidas
   • ruta_img: Ruta al raster de asentamientos
+  • ruta_buffers_base: Ruta base donde están los buffers preexistentes
+  • buffers_disponibles: Diccionario con rutas de cada buffer (1-10km)
   • ruta_csv_salida: Ruta de salida para el CSV de resultados
-  • EXPORTAR_BUFFERS: True para exportar shapefiles, False para solo CSV
-  • ruta_buffers: Carpeta de salida para shapefiles (si EXPORTAR_BUFFERS=True)
+  • distancias_km: Lista de distancias a procesar (por defecto 1-10)
 
 ================================================================================
 USO
@@ -93,10 +97,10 @@ USO
 
 1. Abrir el script en Python IDE (ArcGIS Pro Python Console recomendado)
 2. Configurar rutas de entrada/salida
-3. Cambiar EXPORTAR_BUFFERS a True si desea exportar shapefiles
-4. Ejecutar: python Generacion_buffer_analisis_Asentamientos_en_APs.py
+3. Verificar que buffers preexistentes existen en las rutas especificadas
+4. Ejecutar: python script_calculos_buffers_preexistentes.py
 5. Revisar reporte de procesamiento en consola
-6. Verificar archivos en ruta_csv_salida y ruta_buffers
+6. Verificar archivo CSV en ruta_csv_salida
 
 ================================================================================
 SALIDA DEL SCRIPT
@@ -106,56 +110,32 @@ El script genera:
   • CSV con porcentajes de asentamientos para AP y cada buffer (1-10km)
   • Reporte detallado en consola con progreso y resultados por AP
   • Estadísticas finales (mín, máx, promedio)
-  • Shapefiles de buffers acumulativos (opcional)
   • Información de ubicación de archivos generados
+  • Resumen de AP procesadas exitosamente
 
 ================================================================================
 NOTAS IMPORTANTES - BUFFERS ACUMULATIVOS
 ================================================================================
 
 • BUFFERS ACUMULATIVOS: Cada buffer es acumulativo desde el borde de la AP
-  - AP_ant = Solo AP original
-  - 1km_ant = Desde borde AP hasta 1km (solo anillo 1km, SIN AP)
-  - 2km_ant = Desde borde AP hasta 2km (anillo 1km + 2km, SIN AP)
-  - 3km_ant = Desde borde AP hasta 3km (anillo 1km + 2km + 3km, SIN AP)
+  - AP_ant = Solo AP original (sin ningún buffer)
+  - 1km_ant = Desde borde AP hasta 1km (anillo 1km, SIN AP)
+  - 2km_ant = Desde borde AP hasta 2km (anillos 1km+2km, SIN AP)
+  - 3km_ant = Desde borde AP hasta 3km (anillos 1km+2km+3km, SIN AP)
   - ...
-  - 10km_ant = Desde borde AP hasta 10km (todos los anillos acumulados, SIN AP)
+  - 10km_ant = Desde borde AP hasta 10km (todos anillos acumulados, SIN AP)
 
-• CÁLCULO DE BUFFERS:
-  - Buffer completo = AP buffer hacia afuera en km kilómetros
-  - Buffer sin AP = Buffer completo - AP original
-  - Esto asegura que el buffer NO incluya la AP
+• LOS BUFFERS DEBEN EXISTIR:
+  - Este script NO genera buffers
+  - Los buffers deben haber sido creados previamente
+  - Se cargan desde las rutas especificadas en buffers_disponibles
+  - Si falta algún buffer, el script detiene la ejecución
 
 • CÁLCULO DE PORCENTAJES:
   - ant = SOLO píxeles valor 1 (antrópico/asentamientos)
   - otros = SOLO píxeles valor 0 (natural/vegetación)
   - nodata (2) = se calcula pero NO se incluye en porcentajes
   - Porcentaje = (ant / (ant + otros)) × 100
-
-• EXPORTACIÓN DE SHAPEFILES:
-  - Cambiar EXPORTAR_BUFFERS = True para activar
-  - Se crea una carpeta por AP con buffers como archivos separados
-  - Cada carpeta contiene:
-    * AP_original.shp = Geometría original del AP
-    * Buffer_1km.shp = Buffer desde borde AP hasta 1km
-    * Buffer_2km.shp = Buffer desde borde AP hasta 2km
-    * ... hasta Buffer_10km.shp
-
-================================================================================
-DIFERENCIA ENTRE ANILLOS Y BUFFERS
-================================================================================
-
-ANILLOS INDEPENDIENTES (Generacion_anillos_analisis_Asentamientos_en_APs.py):
-  - Cada anillo es completamente independiente del anterior
-  - 1km_ant = SOLO anillo 1km (sin AP, sin anillo 0-1km)
-  - 2km_ant = SOLO anillo 2km (sin AP, sin anillo 1km)
-  - No hay acumulación, cada uno es aislado
-
-BUFFERS ACUMULATIVOS (Este script):
-  - Cada buffer es acumulativo desde el borde de la AP
-  - 1km_ant = Desde borde AP hasta 1km (acumula solo 1km)
-  - 2km_ant = Desde borde AP hasta 2km (acumula 1km + 2km)
-  - Hay acumulación, cada uno contiene los anteriores
 
 ================================================================================
 CÁLCULO DE DATOS
@@ -167,12 +147,13 @@ El script analiza píxeles raster con los siguientes valores:
   - 2 = NoData (sin información)
 
 Para cada zona (AP, Buffer_1km, Buffer_2km, etc.):
-  1. Extrae los píxeles dentro de la geometría
-  2. Cuenta píxeles con valor 1 (antrópico)
-  3. Cuenta píxeles con valor 0 (natural)
-  4. Cuenta píxeles con valor 2 (nodata) para referencia
-  5. Calcula porcentajes EXCLUYENDO nodata: (ant / (ant + otros)) × 100
-  6. Almacena en CSV junto con metadatos de la AP
+  1. Extrae máscara de píxeles dentro de la geometría
+  2. Convierte a array NumPy para mejor rendimiento
+  3. Cuenta píxeles con valor 1 (antrópico)
+  4. Cuenta píxeles con valor 0 (natural)
+  5. Cuenta píxeles con valor 2 (nodata) para referencia
+  6. Calcula porcentajes EXCLUYENDO nodata: (ant / (ant + otros)) × 100
+  7. Almacena en CSV junto con metadatos de la AP
 
 ================================================================================
 CAMPOS DEL CSV DE SALIDA
@@ -195,63 +176,15 @@ Metadatos de la AP:
   - ALT_STD: Desviación estándar de altitud
 
 Resultados de asentamientos (para cada distancia 1-10km):
-  - AP_ant: % asentamientos en AP
-  - AP_otros: % natural en AP
+  - AP_ant: % asentamientos en AP (sin buffer)
+  - AP_otros: % natural en AP (sin buffer)
   - 1km_ant: % asentamientos buffer 1km acumulativo
   - 1km_otros: % natural buffer 1km acumulativo
   - 2km_ant: % asentamientos buffer 2km acumulativo
   - 2km_otros: % natural buffer 2km acumulativo
   - ... hasta 10km_ant y 10km_otros
 
-================================================================================
-EXPORTACIÓN DE SHAPEFILES
-================================================================================
 
-Cuando EXPORTAR_BUFFERS = True:
-
-Estructura de carpetas generada:
-  BUFFERS_SHAPEFILES/
-  ├── AP_001_Parque_Nacional_Chiloe/
-  │   ├── AP_original.shp
-  │   ├── AP_original.shx
-  │   ├── AP_original.dbf
-  │   ├── Buffer_1km.shp
-  │   ├── Buffer_1km.shx
-  │   ├── Buffer_1km.dbf
-  │   ├── Buffer_2km.shp
-  │   ├── Buffer_2km.shx
-  │   ├── Buffer_2km.dbf
-  │   └── ... hasta Buffer_10km.*
-  ├── AP_002_Parque_Nacional_Otro/
-  │   └── ... (mismo patrón)
-  └── AP_097_...
-
-Cada shapefile de buffer es un POLYGON que representa el área acumulativa
-desde el borde de la AP hasta esa distancia.
-
-================================================================================
-INTERPRETACIÓN DE RESULTADOS
-================================================================================
-
-Alto porcentaje de asentamientos en AP:
-  - Indica presión antrópica dentro del área protegida
-  - Puede sugerir infiltración de asentamientos o zonas urbanas
-
-Bajo porcentaje de asentamientos en buffers:
-  - Indica que el área amortiguadora es principalmente natural
-  - Protección efectiva del área
-
-Alto porcentaje en buffers cercanos (1-2km):
-  - Presión directa en las zonas inmediatas a la AP
-  - Riesgo de expansión urbana
-
-Aumento gradual de asentamientos hacia distancias mayores:
-  - Patrón normal de ocupación del territorio
-  - Fragmentación del paisaje natural
-
-Porcentaje constante en todos los buffers:
-  - Ocupación uniforme del territorio alrededor de la AP
-  - Patrón de desarrollo territorial consistente
 
 ================================================================================
 REQUISITOS DE ENTRADA - ESPECIFICACIONES
@@ -265,12 +198,18 @@ Shapefile de AP (AP_terrestres_actualizadas.shp):
   - Proyección: Debe ser consistente con el raster
   - Cantidad: 97 polígonos (una por AP)
 
-Raster de asentamientos (Asen_buf_2015_modificado.tif):
+Raster de asentamientos (Asen_2017.tif):
   - Tipo: GeoTIFF
   - Valores: 0 (natural), 1 (antrópico), 2 (nodata)
   - Proyección: Debe coincidir con el shapefile
   - Cobertura: Debe cubrir todas las AP y sus buffers
-  - Año: 2015
+  - Año: 2017 (o el año específico)
+
+Shapefiles de Buffers Preexistentes:
+  - Tipo: Geometría POLYGON
+  - Cantidad: 10 archivos (uno por cada km de 1 a 10)
+  - Proyección: Debe coincidir con shapefile de AP y raster
+  - Contenido: Geometrías de buffers acumulativos SIN AP
 
 ================================================================================
 ERRORES COMUNES Y SOLUCIONES
@@ -285,6 +224,11 @@ Error: "No encontré ruta_img"
   → Verificar formato GeoTIFF válido
   → Verificar que no está corrupto
 
+Error: "Buffer Xkm: NO ENCONTRADO"
+  → Verificar que todos los buffers existen en ruta_buffers_base
+  → Verificar nombres de archivo exactos (Buffer_1km_clip.shp, etc.)
+  → Verificar que la ruta está correctamente especificada
+
 ERROR en calcular_porcentajes_numpy:
   → Puede ser que el raster y shapefile tengan proyecciones diferentes
   → Verificar que proyecciones coinciden
@@ -295,34 +239,6 @@ CSV vacío o con pocos datos:
   → Verificar que geometrías del shapefile son válidas
   → Probar con una AP individual primero
 
-Shapefiles no se generan:
-  → Verificar EXPORTAR_BUFFERS = True
-  → Verificar que ruta_buffers existe y tiene permisos de escritura
-  → Verificar espacio en disco suficiente
-
-================================================================================
-CASOS DE USO
-================================================================================
-
-1. Evaluación de eficacia de áreas protegidas:
-   - Analizar expansión de asentamientos dentro y alrededor de APs
-   - Identificar APs bajo mayor presión antrópica
-
-2. Planificación de zonas de amortiguación:
-   - Determinar ancho efectivo de buffer según ocupación del territorio
-   - Recomendar expansión de zonas de protección
-
-3. Monitoreo de cambio de uso de suelo:
-   - Comparar resultados con análisis anteriores
-   - Detectar cambios en ocupación territorial
-
-4. Priorización de recursos:
-   - Identificar APs que requieren mayor vigilancia
-   - Asignar recursos de manejo según presión antrópica
-
-5. Investigación de fragmentación del paisaje:
-   - Analizar conectividad de hábitat natural
-   - Evaluar barreras a la dispersión de fauna
 
 ================================================================================
 NOTAS DE RENDIMIENTO
@@ -330,7 +246,7 @@ NOTAS DE RENDIMIENTO
 
 - Tiempo de procesamiento: ~1-2 minutos por AP (depende del hardware)
 - Memoria requerida: 8GB RAM mínimo recomendado
-- Espacio en disco: ~1-2GB para CSV + shapefiles
+- Espacio en disco: ~500MB para CSV
 - Uso de extensión Spatial: Se checkOut/CheckIn automáticamente
 - Operaciones: Se usan arrays NumPy para mejor rendimiento
 
@@ -339,30 +255,6 @@ Para optimizar:
   - Aumentar memoria RAM del equipo
   - Reducir resolución del raster si es posible
   - Procesar en lotes más pequeños si hay limitaciones
-
-================================================================================
-AUTORES Y REFERENCIAS
-================================================================================
-
-Código: Valentina Contreras
-Proyecto: FONDECYT Nº 1251080
-Institución: [Institución responsable]
-Año: 2025-2026
-
-Referencias:
-  - ArcPy Documentation: https://pro.arcgis.com/en/pro-app/latest/arcpy/
-  - NumPy Documentation: https://numpy.org/doc/
-  - ESRI Spatial Analyst: https://pro.arcgis.com/en/pro-app/latest/tool-reference/spatial-analyst/
-
-================================================================================
-HISTORIAL DE VERSIONES
-================================================================================
-
-v1.0 - 2025-2026:
-  - Script inicial para análisis de asentamientos en APs
-  - Generación de buffers acumulativos 1-10km
-  - Exportación a CSV y shapefiles opcionales
-  - Estadísticas finales por AP
 
 ================================================================================
 """
@@ -375,7 +267,7 @@ from arcpy import sa
 import time
 
 print("\n" + "="*70)
-print("PROCESAMIENTO FONDECYT - 97 APs (BUFFERS ACUMULATIVOS SIN AP)")
+print("PROCESAMIENTO FONDECYT - 97 APs (BUFFERS PREEXISTENTES)")
 print("="*70)
 
 # ======================================================
@@ -384,29 +276,35 @@ print("="*70)
 
 ruta_ap = r"C:\Users\valen\Desktop\Fondecyt\areas_protegidas_totales_actualizadas-20251109T203707Z-1-001\AP_terrestres_actualizadas_26marz26\AP_terrestres_actualizadas_26marz26.shp"
 
-ruta_img = r"C:\Users\valen\Desktop\Fondecyt\settlements\Asentamientos_raster_Chile_clip\modificado\Asen_buf_2015_modificado.tif"
+ruta_img = r"C:\Users\valen\Desktop\Fondecyt\settlements\Asentamientos_raster_Chile_clip\Asen_2017.tif"
 
-ruta_csv_salida = r"C:\Users\valen\Desktop\Fondecyt\settlements\CSV\csv_anillos\resultados_buffers.csv"
+ruta_csv_salida = r"C:\Users\valen\Desktop\Fondecyt\settlements\CSV\csv_anillos\resultados_buffer_2017.csv"
 
-# ====== OPCIÓN: EXPORTAR SHAPEFILES DE BUFFERS ======
-# Cambiar a True si quieres exportar los shapefiles
-EXPORTAR_BUFFERS = False  # ← CAMBIAR A True PARA EXPORTAR
-ruta_buffers = r"C:\Users\valen\Desktop\Fondecyt\settlements\CSV\csv_anillos\BUFFERS_SHAPEFILES"
-# ====================================================
+# RUTAS DE BUFFERS PREEXISTENTES
+ruta_buffers_base = r"C:\Users\valen\Desktop\Fondecyt\areas_protegidas_totales_actualizadas-20251109T203707Z-1-001\Buffer\Buffer_consecutivos\Buffer_clip\Buffer_clip_modificacion_v6"
+
+buffers_disponibles = {
+    1: os.path.join(ruta_buffers_base, "Buffer_1km_clip.shp"),
+    2: os.path.join(ruta_buffers_base, "Buffer_2km_clip.shp"),
+    3: os.path.join(ruta_buffers_base, "Buffer_3km_clip.shp"),
+    4: os.path.join(ruta_buffers_base, "Buffer_4km_clip.shp"),
+    5: os.path.join(ruta_buffers_base, "Buffer_5km_clip.shp"),
+    6: os.path.join(ruta_buffers_base, "Buffer_6km_clip.shp"),
+    7: os.path.join(ruta_buffers_base, "Buffer_7km_clip.shp"),
+    8: os.path.join(ruta_buffers_base, "Buffer_8km_clip.shp"),
+    9: os.path.join(ruta_buffers_base, "Buffer_9km_clip.shp"),
+    10: os.path.join(ruta_buffers_base, "Buffer_10km_clip.shp"),
+}
 
 distancias_km = list(range(1, 11))
 
 os.makedirs(os.path.dirname(ruta_csv_salida), exist_ok=True)
 
-if EXPORTAR_BUFFERS:
-    os.makedirs(ruta_buffers, exist_ok=True)
-
-print("\n📁 CONFIGURACIÓN:")
+print("\n📋 CONFIGURACIÓN:")
 print(f"  AP: {ruta_ap}")
 print(f"  Imagen: {ruta_img}")
 print(f"  CSV salida: {ruta_csv_salida}")
-if EXPORTAR_BUFFERS:
-    print(f"  Buffers shapefiles: {ruta_buffers}")
+print(f"  Buffers base: {ruta_buffers_base}")
 
 # ======================================================
 # VERIFICAR
@@ -421,12 +319,26 @@ if not arcpy.Exists(ruta_img):
     print(f"❌ ERROR: No encontré {ruta_img}")
     exit(1)
 
-print("  ✅ Archivos encontrados")
+print("  ✓ Archivos principales encontrados")
+
+# Verificar buffers
+print("\n✓ Verificando buffers preexistentes...")
+buffers_no_encontrados = []
+for km, ruta_buffer in buffers_disponibles.items():
+    if not arcpy.Exists(ruta_buffer):
+        buffers_no_encontrados.append((km, ruta_buffer))
+        print(f"  ❌ Buffer {km}km: NO ENCONTRADO")
+    else:
+        print(f"  ✓ Buffer {km}km: OK")
+
+if buffers_no_encontrados:
+    print(f"\n❌ ERROR: Faltan {len(buffers_no_encontrados)} buffer(s)")
+    exit(1)
 
 # ======================================================
 # CARGAR DATOS
 # ======================================================
-print("\n📍 Cargando datos...")
+print("\n📊 Cargando datos...")
 
 result = arcpy.management.GetCount(ruta_ap)
 num_ap = int(result[0])
@@ -438,6 +350,7 @@ print(f"  ✓ Imagen raster cargada")
 
 print("\n" + "="*70)
 print("PROCESANDO TODAS LAS 97 ÁREAS PROTEGIDAS")
+print("USANDO BUFFERS PREEXISTENTES")
 print("="*70)
 
 # Habilitar Spatial
@@ -548,56 +461,38 @@ for row in cursor:
         print(f"  📍 AP (solo): ❌ ERROR")
     
     # ======================================================
-    # EXPORTAR SHAPEFILES DE BUFFERS (OPCIONAL)
+    # BUFFERS PREEXISTENTES
+    # (desde borde AP hacia afuera, acumulativos)
     # ======================================================
-    if EXPORTAR_BUFFERS:
-        # Crear carpeta para esta AP
-        carpeta_ap = os.path.join(ruta_buffers, f"AP_{idx:03d}_{nombre_ap.replace(' ', '_')}")
-        os.makedirs(carpeta_ap, exist_ok=True)
-        
-        # Exportar AP original
-        try:
-            fc_ap = os.path.join(carpeta_ap, "AP_original.shp")
-            arcpy.management.CreateFeatureclass(
-                carpeta_ap, "AP_original", geometry_type="POLYGON"
-            )
-            with arcpy.da.InsertCursor(fc_ap, ['SHAPE@']) as cursor_insert:
-                cursor_insert.insertRow([geometry])
-        except:
-            pass
     
-    # ======================================================
-    # BUFFERS ACUMULATIVOS (restando AP - desde borde hacia afuera)
-    # ======================================================
+    print(f"  🔹 Procesando buffers preexistentes...")
+    
     for km in distancias_km:
-        # Buffer de km km MENOS la AP = desde borde AP hasta km km
-        buffer_completo = geometry.buffer(km * 1000)
-        buffer_sin_ap = buffer_completo.difference(geometry)
+        ruta_buffer = buffers_disponibles[km]
         
-        # 1km_ant = anillo 1km (desde borde AP hasta 1km)
-        # 2km_ant = anillo 1km + 2km (desde borde AP hasta 2km)
-        # 3km_ant = anillo 1km + 2km + 3km (desde borde AP hasta 3km)
-        pct_ant, pct_otros, cnt_ant, cnt_otros, cnt_nodata = calcular_porcentajes_numpy(raster_obj, buffer_sin_ap)
-        
-        fila[f'{km}km_ant'] = pct_ant
-        fila[f'{km}km_otros'] = pct_otros
-        
-        if pct_ant is not None:
-            print(f"  📍 Buffer {km}km: ant={pct_ant}% | otros={pct_otros}%")
-        else:
-            print(f"  📍 Buffer {km}km: ❌ ERROR")
-        
-        # Exportar shapefile del buffer si está habilitado
-        if EXPORTAR_BUFFERS:
-            try:
-                fc_buffer = os.path.join(carpeta_ap, f"Buffer_{km}km.shp")
-                arcpy.management.CreateFeatureclass(
-                    carpeta_ap, f"Buffer_{km}km", geometry_type="POLYGON"
-                )
-                with arcpy.da.InsertCursor(fc_buffer, ['SHAPE@']) as cursor_insert:
-                    cursor_insert.insertRow([buffer_sin_ap])
-            except:
-                pass
+        # Seleccionar geometría del buffer que intersecta con el AP actual
+        try:
+            # Crear una capa de selección temporal
+            where_clause = f"OBJECTID >= 0"  # Seleccionar todo
+            
+            # Usar el buffer completo
+            pct_ant, pct_otros, cnt_ant, cnt_otros, cnt_nodata = calcular_porcentajes_numpy(
+                raster_obj, 
+                ruta_buffer  # El archivo shapefile actúa como geometría
+            )
+            
+            fila[f'{km}km_ant'] = pct_ant
+            fila[f'{km}km_otros'] = pct_otros
+            
+            if pct_ant is not None:
+                print(f"     Buffer {km}km: ant={pct_ant}% | otros={pct_otros}%")
+            else:
+                print(f"     Buffer {km}km: ❌ ERROR")
+                
+        except Exception as e:
+            print(f"     Buffer {km}km: ❌ ERROR - {str(e)}")
+            fila[f'{km}km_ant'] = None
+            fila[f'{km}km_otros'] = None
     
     resultados_lista.append(fila)
     
@@ -642,7 +537,7 @@ with open(ruta_csv_salida, 'w', newline='', encoding='utf-8') as csvfile:
     writer.writeheader()
     writer.writerows(resultados_lista)
 
-print(f"  ✅ CSV guardado en:")
+print(f"  ✓ CSV guardado en:")
 print(f"    {ruta_csv_salida}")
 
 # ======================================================
@@ -660,11 +555,7 @@ print(f"  AP con datos: {con_datos}/{len(resultados_lista)}")
 print(f"  Tiempo total: {tiempo_total} minutos")
 print(f"  Tiempo promedio por AP: {round(tiempo_total*60/len(resultados_lista), 1)} segundos")
 print(f"  Cálculo: ant=solo 1 | otros=solo 0 | nodata(2)=no incluido")
-print(f"  Tipo: BUFFERS ACUMULATIVOS (desde borde AP hacia afuera)")
-if EXPORTAR_BUFFERS:
-    print(f"  Buffers exportados: SÍ")
-else:
-    print(f"  Buffers exportados: NO (cambiar EXPORTAR_BUFFERS = True)")
+print(f"  Buffers utilizados: PREEXISTENTES (no generados)")
 print()
 
 valores_ap_ant = [r['AP_ant'] for r in resultados_lista if r['AP_ant'] is not None]
@@ -676,13 +567,9 @@ if valores_ap_ant:
     print(f"  Promedio: {round(sum(valores_ap_ant)/len(valores_ap_ant), 2)}%")
     print()
 
-print("📋 PRIMERAS 5 APs PROCESADAS:")
+print("📌 PRIMERAS 5 APs PROCESADAS:")
 for i, row in enumerate(resultados_lista[:5]):
     print(f"  {i+1}. {row['NOMBRE_TOT']}")
     print(f"     AP_ant={row['AP_ant']}% | 1km_ant={row['1km_ant']}% | 10km_ant={row['10km_ant']}%")
-
-if EXPORTAR_BUFFERS:
-    print(f"\n📁 Shapefiles guardados en:")
-    print(f"   {ruta_buffers}")
 
 print("\n\n🎉 ¡PROCESAMIENTO COMPLETADO EN", tiempo_total, "MINUTOS!\n")
