@@ -1,19 +1,134 @@
 #!/usr/bin/env python3
 """
-SCRIPT  PARA ANALISIS DE DATOS ASENTAMIENTOS Y GENERACION/EXPORTACIÓN DE ANILLOS 97 APs
-ANILLOS INDEPENDIENTES (no acumulativos)
-- AP_ant = Solo AP original
-- 1km_ant = Solo anillo 1km (buffer_1km - AP) SIN nada más
-- 2km_ant = Solo anillo 2km (buffer_2km - buffer_1km) SIN anillo 1km
-- 3km_ant = Solo anillo 3km (buffer_3km - buffer_2km) SIN anillos anteriores
-- ...hasta 10km_ant = Solo anillo 10km (buffer_10km - buffer_9km)
+================================================================================
+TITULO 
+================================================================================
 
-CÁLCULO:
-- ant = SOLO píxeles valor 1
-- otros = SOLO píxeles valor 0
-- nodata (2) = se calcula pero NO se incluye en porcentajes
+PROYECTO FONDECYT Nº 1251080
+"Evaluación de las áreas protegidas y sus zonas de amortiguación en Chile: 
+un análisis geoespacial de su eficacia para contrarrestar el cambio global"
 
-OPCIÓN: Exportar shapefiles de buffers (cambiar EXPORTAR_BUFFERS = True)
+AUTOR: Valentina Contreras
+
+================================================================================
+DESCRIPCIÓN GENERAL
+================================================================================
+
+Este script realiza análisis de datos de asentamientos y genera/exporta anillos
+independientes alrededor de 97 Áreas Protegidas (AP). Calcula porcentajes de
+píxeles antrópicos y naturales para cada zona de análisis.
+
+El procesamiento incluye:
+  - Análisis de AP sin modificación
+  - Generación de anillos independientes de 1km a 10km
+  - Cálculo de porcentajes de asentamientos (ant) vs natural (otros)
+  - Exportación de resultados a CSV
+  - Exportación opcional de shapefiles de anillos
+
+================================================================================
+FLUJO DE TRABAJO
+================================================================================
+
+1. CONFIGURACIÓN
+   - Definir rutas de entrada (shapefile de AP, raster de asentamientos)
+   - Definir ruta de salida (CSV con resultados)
+   - Configurar opción de exportar shapefiles de anillos
+
+2. VERIFICACIÓN
+   - Validar existencia de archivos de entrada
+   - Cargar cantidad de AP
+
+3. PROCESAMIENTO POR AP
+   - Para cada AP:
+     * Analizar AP sin modificación
+     * Generar anillos independientes (1-10km)
+     * Calcular porcentajes de cobertura antrópica
+     * Exportar shapefiles si está habilitado
+
+4. EXPORTACIÓN
+   - Guardar resultados en CSV con formato tabulado
+   - Generar resumen de procesamiento
+
+5. RESUMEN
+   - Mostrar estadísticas finales
+   - Indicar ubicación de archivos de salida
+
+================================================================================
+REQUISITOS TÉCNICOS
+================================================================================
+
+• Python 3.6+
+• ArcGIS Desktop / ArcGIS Pro (con extensión Spatial Analyst)
+• Módulos: arcpy, os, csv, numpy
+• Acceso a licencias de ArcGIS
+• Rásteres de entrada en formato GeoTIFF
+
+================================================================================
+FLUJO DE ENTRADA/SALIDA
+================================================================================
+
+ENTRADA:
+  - Shapefile de Áreas Protegidas (AP_terrestres_actualizadas.shp)
+  - Raster de asentamientos (Asen_buf_2015_modificado.tif)
+
+SALIDA:
+  - CSV con resultados de análisis (resultados_anillos.csv)
+  - Shapefiles de anillos (opcional, en carpeta ANILLOS_SHAPEFILES)
+
+================================================================================
+CONFIGURACIÓN
+================================================================================
+
+Antes de ejecutar, modifica los siguientes parámetros:
+
+  • ruta_ap: Ruta al shapefile de Áreas Protegidas
+  • ruta_img: Ruta al raster de asentamientos
+  • ruta_csv_salida: Ruta de salida para el CSV de resultados
+  • EXPORTAR_ANILLOS: True para exportar shapefiles, False para solo CSV
+  • ruta_anillos: Carpeta de salida para shapefiles (si EXPORTAR_ANILLOS=True)
+
+================================================================================
+USO
+================================================================================
+
+1. Abrir el script en Python IDE (ArcGIS Pro Python Console recomendado)
+2. Configurar rutas de entrada/salida
+3. Cambiar EXPORTAR_ANILLOS a True si desea exportar shapefiles
+4. Ejecutar: python Generacion_anillos_analisis_Asentamientos_en_APs.py
+5. Revisar reporte de procesamiento en consola
+6. Verificar archivos en ruta_csv_salida y ruta_anillos
+
+================================================================================
+SALIDA DEL SCRIPT
+================================================================================
+
+El script genera:
+  • CSV con porcentajes de asentamientos para AP y cada anillo (1-10km)
+  • Reporte detallado en consola con progreso y resultados por AP
+  • Estadísticas finales (mín, máx, promedio)
+  • Shapefiles de anillos independientes (opcional)
+  • Información de ubicación de archivos generados
+
+================================================================================
+NOTAS IMPORTANTES
+================================================================================
+
+• ANILLOS INDEPENDIENTES: Cada anillo es aislado del anterior
+  - AP_ant = Solo AP original
+  - 1km_ant = Solo anillo 1km (sin AP)
+  - 2km_ant = Solo anillo 2km (sin anillo 1km ni AP)
+  - etc.
+
+• CÁLCULO DE PORCENTAJES:
+  - ant = SOLO píxeles valor 1 (antrópico)
+  - otros = SOLO píxeles valor 0 (natural)
+  - nodata (2) = se calcula pero NO se incluye en porcentajes
+
+• EXPORTACIÓN DE SHAPEFILES:
+  - Cambiar EXPORTAR_ANILLOS = True para activar
+  - Se crea una carpeta por AP con anillos como archivos separados
+
+================================================================================
 """
 
 import arcpy
@@ -37,25 +152,25 @@ ruta_img = r"C:\Users\valen\Desktop\Fondecyt\settlements\Asentamientos_raster_Ch
 
 ruta_csv_salida = r"C:\Users\valen\Desktop\Fondecyt\settlements\CSV\csv_anillos\resultados_anillos.csv"
 
-# ====== OPCIÓN: EXPORTAR SHAPEFILES DE BUFFERS ======
+# ====== OPCIÓN: EXPORTAR SHAPEFILES DE ANILLOS ======
 # Cambiar a True si quieres exportar los shapefiles
-EXPORTAR_BUFFERS = False  # ← CAMBIAR A True PARA EXPORTAR
-ruta_buffers = r"C:\Users\valen\Desktop\Fondecyt\settlements\CSV\csv_anillos\BUFFERS_SHAPEFILES"
+EXPORTAR_ANILLOS = False  # ← CAMBIAR A True PARA EXPORTAR
+ruta_anillos = r"C:\Users\valen\Desktop\Fondecyt\settlements\CSV\csv_anillos\ANILLOS_SHAPEFILES"
 # ====================================================
 
 distancias_km = list(range(1, 11))
 
 os.makedirs(os.path.dirname(ruta_csv_salida), exist_ok=True)
 
-if EXPORTAR_BUFFERS:
-    os.makedirs(ruta_buffers, exist_ok=True)
+if EXPORTAR_ANILLOS:
+    os.makedirs(ruta_anillos, exist_ok=True)
 
 print("\n📁 CONFIGURACIÓN:")
 print(f"  AP: {ruta_ap}")
 print(f"  Imagen: {ruta_img}")
 print(f"  CSV salida: {ruta_csv_salida}")
-if EXPORTAR_BUFFERS:
-    print(f"  Buffers shapefiles: {ruta_buffers}")
+if EXPORTAR_ANILLOS:
+    print(f"  Anillos shapefiles: {ruta_anillos}")
 
 # ======================================================
 # VERIFICAR
@@ -184,7 +299,7 @@ for row in cursor:
     geometry = row[1]
     
     # ======================================================
-    # AP SIN BUFFER (INDEPENDIENTE)
+    # AP SIN ANILLO (INDEPENDIENTE)
     # ======================================================
     pct_ant_ap, pct_otros_ap, cnt_ant_ap, cnt_otros_ap, cnt_nodata_ap = calcular_porcentajes_numpy(raster_obj, geometry)
     fila['AP_ant'] = pct_ant_ap
@@ -197,11 +312,11 @@ for row in cursor:
         print(f"  📍 AP (solo): ❌ ERROR")
     
     # ======================================================
-    # EXPORTAR SHAPEFILES DE BUFFERS (OPCIONAL)
+    # EXPORTAR SHAPEFILES DE ANILLOS (OPCIONAL)
     # ======================================================
-    if EXPORTAR_BUFFERS:
+    if EXPORTAR_ANILLOS:
         # Crear carpeta para esta AP
-        carpeta_ap = os.path.join(ruta_buffers, f"AP_{idx:03d}_{nombre_ap.replace(' ', '_')}")
+        carpeta_ap = os.path.join(ruta_anillos, f"AP_{idx:03d}_{nombre_ap.replace(' ', '_')}")
         os.makedirs(carpeta_ap, exist_ok=True)
         
         # Exportar AP original
@@ -218,18 +333,18 @@ for row in cursor:
     # ======================================================
     # ANILLOS INDEPENDIENTES (cada uno aislado)
     # ======================================================
-    buffer_anterior = geometry  # Comenzar desde la AP
+    anillo_anterior = geometry  # Comenzar desde la AP
     
     for km in distancias_km:
-        # Buffer actual
-        buffer_actual = geometry.buffer(km * 1000)
+        # Anillo actual
+        anillo_actual = geometry.buffer(km * 1000)
         
-        # Anillo = buffer_actual - buffer_anterior
+        # Anillo = anillo_actual - anillo_anterior
         # Ejemplo:
-        # 1km: buffer_1km - AP = solo anillo 1km
-        # 2km: buffer_2km - buffer_1km = solo anillo 2km
-        # 3km: buffer_3km - buffer_2km = solo anillo 3km
-        anillo = buffer_actual.difference(buffer_anterior)
+        # 1km: anillo_1km - AP = solo anillo 1km
+        # 2km: anillo_2km - anillo_1km = solo anillo 2km
+        # 3km: anillo_3km - anillo_2km = solo anillo 3km
+        anillo = anillo_actual.difference(anillo_anterior)
         
         pct_ant, pct_otros, cnt_ant, cnt_otros, cnt_nodata = calcular_porcentajes_numpy(raster_obj, anillo)
         
@@ -242,7 +357,7 @@ for row in cursor:
             print(f"  📍 Anillo {km}km (independiente): ❌ ERROR")
         
         # Exportar shapefile del anillo si está habilitado
-        if EXPORTAR_BUFFERS:
+        if EXPORTAR_ANILLOS:
             try:
                 fc_anillo = os.path.join(carpeta_ap, f"Anillo_{km}km.shp")
                 arcpy.management.CreateFeatureclass(
@@ -254,7 +369,7 @@ for row in cursor:
                 pass
         
         # Guardar para próxima iteración
-        buffer_anterior = buffer_actual
+        anillo_anterior = anillo_actual
     
     resultados_lista.append(fila)
     
@@ -318,10 +433,10 @@ print(f"  Tiempo total: {tiempo_total} minutos")
 print(f"  Tiempo promedio por AP: {round(tiempo_total*60/len(resultados_lista), 1)} segundos")
 print(f"  Cálculo: ant=solo 1 | otros=solo 0 | nodata(2)=no incluido")
 print(f"  Tipo: ANILLOS INDEPENDIENTES (cada anillo aislado)")
-if EXPORTAR_BUFFERS:
-    print(f"  Buffers exportados: SÍ")
+if EXPORTAR_ANILLOS:
+    print(f"  Anillos exportados: SÍ")
 else:
-    print(f"  Buffers exportados: NO (cambiar EXPORTAR_BUFFERS = True)")
+    print(f"  Anillos exportados: NO (cambiar EXPORTAR_ANILLOS = True)")
 print()
 
 valores_ap_ant = [r['AP_ant'] for r in resultados_lista if r['AP_ant'] is not None]
@@ -338,8 +453,8 @@ for i, row in enumerate(resultados_lista[:5]):
     print(f"  {i+1}. {row['NOMBRE_TOT']}")
     print(f"     AP_ant={row['AP_ant']}% | 1km_ant={row['1km_ant']}% | 10km_ant={row['10km_ant']}%")
 
-if EXPORTAR_BUFFERS:
+if EXPORTAR_ANILLOS:
     print(f"\n📁 Shapefiles guardados en:")
-    print(f"   {ruta_buffers}")
+    print(f"   {ruta_anillos}")
 
 print("\n\n🎉 ¡PROCESAMIENTO COMPLETADO EN", tiempo_total, "MINUTOS!\n")
