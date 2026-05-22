@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SCRIPT ULTRA-RÁPIDO PARA 97 APs
+SCRIPT  PARA ANALISIS DE DATOS ASENTAMIENTOS Y GENERACION/EXPORTACIÓN DE ANILLOS 97 APs
 ANILLOS INDEPENDIENTES (no acumulativos)
 - AP_ant = Solo AP original
 - 1km_ant = Solo anillo 1km (buffer_1km - AP) SIN nada más
