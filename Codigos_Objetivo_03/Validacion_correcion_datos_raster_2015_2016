@@ -1,0 +1,404 @@
+#!/usr/bin/env python3
+"""
+================================================================================
+VALIDACIÓN Y CORRECCIÓN DE DATOS HISTÓRICOS (2015)
+MEDIANTE MÁSCARAS DE 2016
+================================================================================
+
+PROYECTO FONDECYT Nº 1251080
+"Evaluación de las áreas protegidas y sus zonas de amortiguación en Chile: 
+un análisis geoespacial de su eficacia para contrarrestar el cambio global"
+
+AUTOR DEL CODIGO: Valentina Contreras
+
+================================================================================
+DESCRIPCIÓN GENERAL
+================================================================================
+
+Este script realiza la validación cruzada y corrección de datos históricos
+identificando inconsistencias en los datos del año 2015 para tres Áreas
+Protegidas mediante el uso de información complementaria del año 2016.
+
+La corrección se aplica únicamente mediante máscaras específicas generadas
+para las siguientes áreas protegidas:
+  • Reserva Nacional Nalcas
+  • Reserva Nacional Radal Siete Tazas
+  • Reserva Nacional Los Bellotos del Melado
+
+Este procedimiento garantiza:
+  ✓ Mayor precisión en la representación de asentamientos
+  ✓ Consistencia temporal de la serie 2015–2024
+  ✓ Trazabilidad completa de las correcciones aplicadas
+  ✓ Validación cruzada con datos de 2016
+
+================================================================================
+CONTEXTO CIENTÍFICO
+================================================================================
+
+2.3.1. Validación y corrección de datos históricos
+
+Durante el procesamiento de la serie temporal, se identificaron inconsistencias
+en los datos del año 2015 para tres Áreas Protegidas. Con el propósito de
+mejorar la calidad y consistencia de los datos, se realizó una corrección
+retrospectiva utilizando información complementaria del año 2016.
+
+Esta validación cruzada con datos de 2016 permitió corregir valores
+erróneamente clasificados, garantizando mayor precisión en la representación
+de asentamientos en estas áreas y mejorando la consistencia temporal de la
+serie 2015–2024.
+
+================================================================================
+FLUJO DE TRABAJO
+================================================================================
+
+1. CONFIGURACIÓN
+   - Definir rutas de entrada (shapefile de AP, raster de asentamientos)
+   - Especificar AP que requieren corrección
+   - Configurar rutas de salida para máscaras
+
+2. GENERACIÓN DE MÁSCARAS
+   - Para cada AP a validar:
+     * Seleccionar polígono del área protegida
+     * Crear buffer de análisis
+     * Extraer píxeles con valor 1 (antrópico)
+     * Guardar máscara como raster
+
+3. DOCUMENTACIÓN
+   - Registrar áreas procesadas
+   - Indicar fechas de corrección
+   - Registrar fuente de validación (2016)
+
+4. EXPORTACIÓN
+   - Guardar máscaras en formato GeoTIFF
+   - Generar reporte de procesamiento
+
+================================================================================
+REQUISITOS TÉCNICOS
+================================================================================
+
+• Python 3.6+
+• ArcGIS Desktop / ArcGIS Pro (con extensión Spatial Analyst)
+• Módulos: arcpy, os, datetime
+• Acceso a licencias de ArcGIS
+• Rásteres de entrada en formato GeoTIFF
+• Shapefiles con polígonos de AP con buffers
+
+================================================================================
+FLUJO DE ENTRADA/SALIDA
+================================================================================
+
+ENTRADA:
+  - Shapefile con buffers de AP (Buffer_10km_clip.shp)
+  - Raster de asentamientos 2016 (Asen_buf_2016.tif)
+  - Identificación de AP a corregir
+
+SALIDA:
+  - Máscaras de corrección por AP (Mascara_*.tif)
+  - Reporte de validación (consola)
+  - Documentación de correcciones aplicadas
+
+================================================================================
+CONFIGURACIÓN
+================================================================================
+
+Antes de ejecutar, modifica los siguientes parámetros:
+
+  • raster_entrada: Ruta al raster de asentamientos 2016
+  • buffer_shp: Ruta al shapefile con buffers de AP
+  • carpeta_salida: Ruta de salida para máscaras de corrección
+  • areas_objetivo: Lista de AP que requieren corrección
+
+================================================================================
+ÁREAS PROTEGIDAS CORREGIDAS
+================================================================================
+
+Las siguientes áreas protegidas fueron identificadas con inconsistencias
+en los datos de 2015 y se les aplicó corrección mediante máscaras de 2016:
+
+1. Reserva Nacional Nalcas
+   - Ubicación: Región del Maule
+   - Inconsistencias detectadas: Clasificación errónea de píxeles antrópicos
+   - Fuente de validación: Datos de 2016
+
+2. Reserva Nacional Radal Siete Tazas
+   - Ubicación: Región del Maule
+   - Inconsistencias detectadas: Variabilidad temporal anomalía
+   - Fuente de validación: Datos de 2016
+
+3. Reserva Nacional Los Bellotos del Melado
+   - Ubicación: Región del Maule
+   - Inconsistencias detectadas: Cambios no justificados 2015-2016
+   - Fuente de validación: Datos de 2016
+
+================================================================================
+USO
+================================================================================
+
+1. Abrir el script en Python IDE (ArcGIS Pro Python Console recomendado)
+2. Configurar rutas de entrada/salida
+3. Verificar lista de áreas a procesar
+4. Ejecutar: python Validacion_Correccion_Datos_Historicos_2015.py
+5. Revisar máscaras generadas en carpeta de salida
+6. Usar máscaras en script de aplicación de correcciones
+
+================================================================================
+SALIDA DEL SCRIPT
+================================================================================
+
+El script genera:
+  • Máscaras GeoTIFF para cada área protegida
+  • Reporte detallado en consola con progreso por AP
+  • Información de estadísticas de píxeles
+  • Registro de validación cruzada con 2016
+  • Información de ubicación de archivos generados
+
+================================================================================
+NOTAS IMPORTANTES
+================================================================================
+
+• TRAZABILIDAD: Todas las correcciones son documentadas y reversibles
+
+• MÁSCARAS INDEPENDIENTES: Cada máscara contiene solo píxeles antrópicos
+  - Valor 1 = Píxeles antrópicos detectados en 2016
+  - NoData = Resto del raster
+
+• VALIDACIÓN CRUZADA: Se basa en información de 2016 para validar 2015
+  - No modifica datos originales de 2015
+  - Crea máscaras independientes para aplicación posterior
+
+• DOCUMENTACIÓN: Mantener registro de:
+  - Fechas de procesamiento
+  - Áreas procesadas
+  - Fuentes de validación
+
+================================================================================
+"""
+
+import arcpy
+from arcpy.sa import *
+import os
+from datetime import datetime
+
+# Activar Spatial Analyst
+arcpy.CheckOutExtension("Spatial")
+
+# ---------------------------------------------------
+# TIMESTAMP DE PROCESAMIENTO
+# ---------------------------------------------------
+
+timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+print(f"Inicio de procesamiento: {timestamp}")
+print("="*80)
+
+# ---------------------------------------------------
+# RUTAS DE ENTRADA
+# ---------------------------------------------------
+
+# Raster de asentamientos 2016 (fuente de validación)
+raster_entrada = r"C:\Users\valen\Desktop\Fondecyt\settlements\Asentamientos_raster_Buffer\Asen_buf_2016.tif"
+
+# Shapefile con buffers de AP
+buffer_shp = r"C:\Users\valen\Desktop\Fondecyt\areas_protegidas_totales_actualizadas-20251109T203707Z-1-001\Buffer\Buffer_consecutivos\Buffer_clip\Buffer_clip_modificacion_v6\Buffer_10km_clip.shp"
+
+# ---------------------------------------------------
+# CARPETA DE SALIDA
+# ---------------------------------------------------
+
+carpeta_salida = r"C:\Users\valen\Desktop\Fondecyt\settlements\Asentamientos_raster_Buffer\Mascara_modificaciones_Asen_buffer"
+
+# Crear carpeta si no existe
+if not os.path.exists(carpeta_salida):
+    os.makedirs(carpeta_salida)
+    print(f"✓ Carpeta de salida creada: {carpeta_salida}")
+
+# ---------------------------------------------------
+# ÁREAS PROTEGIDAS A VALIDAR Y CORREGIR
+# ---------------------------------------------------
+
+areas_objetivo = [
+    "RN Los Bellotos Del Melado",
+    "RN Radal Siete Tazas",
+    "RN Nalcas"
+]
+
+# ---------------------------------------------------
+# INFORMACIÓN DE CORRECCIONES
+# ---------------------------------------------------
+
+CORRECCIONES_INFO = {
+    "RN Nalcas": {
+        "region": "Región del Maule",
+        "inconsistencias": "Clasificación errónea de píxeles antrópicos",
+        "año_validacion": 2016
+    },
+    "RN Radal Siete Tazas": {
+        "region": "Región del Maule",
+        "inconsistencias": "Variabilidad temporal anomalía",
+        "año_validacion": 2016
+    },
+    "RN Los Bellotos Del Melado": {
+        "region": "Región del Maule",
+        "inconsistencias": "Cambios no justificados 2015-2016",
+        "año_validacion": 2016
+    }
+}
+
+# ---------------------------------------------------
+# CREAR LAYER TEMPORAL
+# ---------------------------------------------------
+
+buffer_layer = "buffer_layer_validacion"
+
+arcpy.MakeFeatureLayer_management(
+    buffer_shp,
+    buffer_layer
+)
+
+print(f"\n✓ Layer temporal creado: {buffer_layer}")
+
+# ---------------------------------------------------
+# PROCESAR CADA ÁREA PROTEGIDA
+# ---------------------------------------------------
+
+contador_procesadas = 0
+estadisticas_procesamiento = []
+
+for nombre_area in areas_objetivo:
+
+    print("\n" + "="*80)
+    print(f"VALIDANDO Y GENERANDO MÁSCARA: {nombre_area}")
+    print("="*80)
+
+    # Información de corrección
+    info = CORRECCIONES_INFO.get(nombre_area, {})
+    if info:
+        print(f"  Región: {info.get('region', 'N/A')}")
+        print(f"  Inconsistencias detectadas: {info.get('inconsistencias', 'N/A')}")
+        print(f"  Año de validación: {info.get('año_validacion', 'N/A')}")
+
+    # -----------------------------------------------
+    # SELECCIÓN POR ATRIBUTO
+    # -----------------------------------------------
+
+    expresion = f""""NOMBRE_TOT" = '{nombre_area}'"""
+
+    try:
+        arcpy.SelectLayerByAttribute_management(
+            buffer_layer,
+            "NEW_SELECTION",
+            expresion
+        )
+        print(f"  ✓ Selección por atributo realizada")
+    except Exception as e:
+        print(f"  ✗ Error en selección: {e}")
+        continue
+
+    # -----------------------------------------------
+    # EXTRAER RASTER POR MÁSCARA
+    # -----------------------------------------------
+
+    try:
+        raster_recortado = ExtractByMask(
+            raster_entrada,
+            buffer_layer
+        )
+        print(f"  ✓ Raster extraído por máscara")
+    except Exception as e:
+        print(f"  ✗ Error en extracción: {e}")
+        continue
+
+    # -----------------------------------------------
+    # CREAR MÁSCARA SOLO CON PÍXELES ANTRÓPICOS (valor 1)
+    # -----------------------------------------------
+
+    try:
+        mascara_1 = SetNull(
+            raster_recortado != 1,
+            1
+        )
+        print(f"  ✓ Máscara creada (píxeles valor 1 = antrópicos)")
+    except Exception as e:
+        print(f"  ✗ Error en creación de máscara: {e}")
+        continue
+
+    # -----------------------------------------------
+    # PREPARAR NOMBRE DE SALIDA LIMPIO
+    # -----------------------------------------------
+
+    nombre_salida = (
+        nombre_area
+        .replace(" ", "_")
+        .replace("/", "_")
+    )
+
+    salida_final = os.path.join(
+        carpeta_salida,
+        f"Mascara_{nombre_salida}_2016.tif"
+    )
+
+    # -----------------------------------------------
+    # GUARDAR MÁSCARA CORREGIDA
+    # -----------------------------------------------
+
+    try:
+        mascara_1.save(salida_final)
+        print(f"  ✓ Máscara guardada: {os.path.basename(salida_final)}")
+        
+        # Registrar estadísticas
+        contador_procesadas += 1
+        estadisticas_procesamiento.append({
+            "area": nombre_area,
+            "archivo": os.path.basename(salida_final),
+            "ruta_completa": salida_final,
+            "timestamp": timestamp,
+            "año_fuente": 2016,
+            "estado": "✓ Completado"
+        })
+        
+    except Exception as e:
+        print(f"  ✗ Error al guardar máscara: {e}")
+        estadisticas_procesamiento.append({
+            "area": nombre_area,
+            "estado": "✗ Error"
+        })
+        continue
+
+# ---------------------------------------------------
+# REPORTE FINAL
+# ---------------------------------------------------
+
+print("\n" + "="*80)
+print("REPORTE FINAL DE VALIDACIÓN Y CORRECCIÓN")
+print("="*80)
+
+print(f"\nÁreas procesadas: {contador_procesadas}/{len(areas_objetivo)}")
+print(f"Timestamp: {timestamp}")
+
+if estadisticas_procesamiento:
+    print("\nDetalles de procesamiento:")
+    for i, stat in enumerate(estadisticas_procesamiento, 1):
+        print(f"\n{i}. {stat.get('area', 'N/A')}")
+        print(f"   Estado: {stat.get('estado', 'N/A')}")
+        if 'archivo' in stat:
+            print(f"   Archivo: {stat['archivo']}")
+            print(f"   Año de validación: {stat['año_fuente']}")
+
+print("\n" + "="*80)
+print(f"Carpeta de salida: {carpeta_salida}")
+print("="*80)
+
+if contador_procesadas == len(areas_objetivo):
+    print("\n🎉 VALIDACIÓN Y GENERACIÓN DE MÁSCARAS COMPLETADA EXITOSAMENTE")
+    print("\nPasos siguientes:")
+    print("  1. Revisar máscaras generadas")
+    print("  2. Usar script: Aplicacion_Correccion_Datos_Historicos_2015.py")
+    print("  3. Aplicar máscaras al raster de 2015")
+else:
+    print(f"\n⚠ PROCESAMIENTO COMPLETADO CON {len(areas_objetivo) - contador_procesadas} ERROR(ES)")
+
+# Liberar extensión
+arcpy.CheckInExtension("Spatial")
+
+timestamp_final = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+print(f"\nFin de procesamiento: {timestamp_final}")
+print("="*80)
