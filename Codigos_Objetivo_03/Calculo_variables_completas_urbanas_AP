@@ -1,0 +1,621 @@
+"""
+================================================================================
+CÁLCULO DE VARIABLES URBANAS POR ÁREA PROTEGIDA 
+================================================================================
+
+PROYECTO FONDECYT N° 1251080
+"Evaluación de las áreas protegidas y sus zonas de amortiguación en Chile:
+un análisis geoespacial de su eficacia para contrarrestar el cambio global"
+
+AUTORA: Valentina Contreras
+
+================================================================================
+DESCRIPCIÓN GENERAL
+================================================================================
+
+Este script calcula variables de distancia y población urbana para cada una
+de las 97 Áreas Protegidas (AP) terrestres de Chile, usando como base el
+borde lineal de cada AP y un buffer de 10 km como zona de influencia.
+
+Los cálculos se realizan a partir de las manzanas censales del
+Censo de Población y Vivienda 2024 (CPV 2024) del INE.
+
+VARIABLES DE SALIDA:
+  DIST_URB_M → distancia (m) desde el borde del AP a la ciudad con mayor
+                población urbana dentro del buffer
+  DIST_URB_K → misma distancia en kilómetros
+  NOM_URB_MX → nombre de la ciudad con mayor población urbana en el buffer
+  POB_URB_MX → población urbana de esa ciudad dentro del buffer
+               (ponderada por fracción de área de manzanas)
+  POB_URB_TT → población urbana total de todas las ciudades en el buffer
+               (ponderada por fracción de área de manzanas)
+  N_CIUDADES → número de ciudades urbanas en el buffer
+  DMIN_URB_M → distancia mínima a cualquier ciudad urbana (m)
+  DMAX_URB_M → distancia máxima a cualquier ciudad urbana (m)
+  DPROM_URB  → promedio de distancias a todas las ciudades (m)
+  DMED_URB_M → mediana de distancias a todas las ciudades (m)
+  RANG_URB_M → rango de distancias: DMAX - DMIN (m)
+  DESV_URB_M → desviación estándar de distancias (m)
+  SUP_URB_HA → superficie urbana total en el buffer (hectáreas)
+
+================================================================================
+LÓGICA METODOLÓGICA CLAVE
+================================================================================
+
+1. DISTANCIA: se mide desde el BORDE LINEAL del AP (no desde el centroide
+   ni desde el interior), usando geom_borde.distanceTo(manzana).
+
+2. CIUDAD SELECCIONADA: se elige la ciudad con MAYOR POBLACIÓN DENTRO DEL
+   BUFFER, calculada como suma ponderada de sus manzanas que intersectan
+   el buffer. Si una manzana cae parcialmente, su población se pondera:
+       pob_aportada = pob_manzana × (área_intersección / área_manzana_total)
+   Esto resuelve automáticamente casos donde una ciudad grande comparte
+   buffer con dos APs vecinas (ej. Coyhaique / Río Simpson).
+
+3. POB_URB_TT: suma ponderada de TODAS las manzanas urbanas en el buffer,
+   independiente de la ciudad a la que pertenecen.
+
+4. SUP_URB_HA: intersección geométrica entre el buffer y cada manzana,
+   sumada y convertida a hectáreas (÷ 10.000).
+
+================================================================================
+REQUISITOS
+================================================================================
+
+  • ArcGIS Pro con arcpy habilitado
+  • Extensión Spatial Analyst (no requerida en este script)
+  • Python 3.x (entorno arcgispro-py3)
+  • Módulos: arcpy, os, statistics, shutil
+
+================================================================================
+ENTRADAS REQUERIDAS
+================================================================================
+
+  • Shapefile de borde lineal de AP
+  • Shapefile de buffer de 10 km por AP
+  • Shapefile de manzanas censales con población (CPV 2024)
+  • Shapefile de polígonos de AP
+
+================================================================================
+SALIDA
+================================================================================
+
+  • Shapefile de borde con 13 columnas de variables urbanas calculadas
+
+================================================================================
+INSTRUCCIONES DE USO
+================================================================================
+
+  1. Reemplazar las rutas en la sección PARÁMETROS con tus archivos locales
+  2. Verificar que los nombres de campos (col_nombre_ap, col_ciudad,
+     col_poblacion) coincidan con los campos reales de tus shapefiles
+  3. Ejecutar desde la consola Python de ArcGIS Pro
+  4. Revisar el resumen final en consola para validar resultados
+
+================================================================================
+HISTORIAL DE VERSIONES
+================================================================================
+
+  v15 — 2026-06-08
+    · Lógica de población ponderada por fracción de área (manzanas parciales)
+    · Nombres de columnas estandarizados con prefijo URB
+    · Superficie en hectáreas (SUP_URB_HA)
+    · Limpieza robusta de carpeta temporal con manejo de locks de ArcGIS
+
+================================================================================
+"""
+
+import arcpy
+import os
+import statistics
+import shutil
+
+# ================================================================================
+# PARÁMETROS — REEMPLAZAR CON TUS RUTAS
+# ================================================================================
+# Instrucciones:
+#   · Reemplaza cada ruta entre comillas por la ruta real en tu equipo
+#   · Todos los shapefiles deben tener el mismo campo identificador de AP
+#     (por defecto "NOMBRE_TOT" — cambia col_nombre_ap si tu campo tiene otro nombre)
+#   · El shapefile de ciudades debe tener un campo de nombre de ciudad y uno de población
+#   · La carpeta temporal (carpeta_utm) se crea y elimina automáticamente
+
+# Shapefile de borde LINEAL de las áreas protegidas
+# → Geometría de tipo línea que representa el contorno de cada AP
+borde_orig    = r"RUTA\A\TU\AP_borde_linea.shp"
+
+# Shapefile de buffer de 10 km alrededor de cada AP (recortado)
+# → Polígono que define la zona de influencia urbana de cada AP
+buffer_orig   = r"RUTA\A\TU\Buffer_10km_clip.shp"
+
+# Shapefile de manzanas censales con población urbana (CPV 2024)
+# → Debe contener un campo de nombre de ciudad/comuna y uno de población
+ciudades_orig = r"RUTA\A\TU\Poblacion_comunas_manzanas_censales.shp"
+
+# Shapefile de polígonos de las áreas protegidas
+# → Se usa para cargar el área de cada AP (referencia)
+ap_pol_orig   = r"RUTA\A\TU\AP_terrestres_actualizadas.shp"
+
+# Carpeta temporal para shapefiles reproyectados (se crea y elimina automáticamente)
+carpeta_utm   = r"RUTA\A\TU\CARPETA\UTM19S_tmp"
+
+# Ruta y nombre del shapefile de salida
+output_shp    = r"RUTA\A\TU\CARPETA\AP_borde_distancias_20260608.shp"
+
+# ── Nombres de campos en los shapefiles de entrada ────────────────────────────
+# Cambia estos valores si tus campos tienen nombres distintos
+
+# Campo identificador del área protegida (debe ser igual en borde, buffer y AP pol)
+col_nombre_ap = "NOMBRE_TOT"
+
+# Campo con el nombre de la ciudad/comuna en el shapefile de manzanas censales
+col_ciudad    = "COMUNA"
+
+# Campo con la población en el shapefile de manzanas censales
+col_poblacion = "n_per"
+
+# ── Nombres de columnas de salida (máximo 10 caracteres — límite de shapefile) ─
+C_DIST_M     = "DIST_URB_M"   # 10  distancia (m) borde → ciudad con mayor pob en buffer
+C_DIST_KM    = "DIST_URB_K"   #  9  distancia (km)
+C_CIUDAD     = "NOM_URB_MX"   # 10  nombre ciudad con mayor pob urbana
+C_POB_CIUDAD = "POB_URB_MX"   # 10  pob urbana de esa ciudad (manzanas ponderadas)
+C_POB_TOTAL  = "POB_URB_TT"   # 10  pob urbana total todas las ciudades en buffer
+C_N_CIUDAD   = "N_CIUDADES"   # 10  número de ciudades urbanas en buffer
+C_DIST_MIN   = "DMIN_URB_M"   # 10  distancia mínima urbana (m)
+C_DIST_MAX   = "DMAX_URB_M"   # 10  distancia máxima urbana (m)
+C_DIST_PROM  = "DPROM_URB"    #  9  promedio distancias urbanas (m)
+C_DIST_MED   = "DMED_URB_M"   # 10  mediana distancias urbanas (m)
+C_RANGO      = "RANG_URB_M"   # 10  rango distancias (m)
+C_DESV       = "DESV_URB_M"   # 10  desviación estándar distancias (m)
+C_SUP_HA     = "SUP_URB_HA"   # 10  superficie urbana en buffer (hectáreas)
+
+# Valor que se asigna cuando una AP no tiene ciudades en su buffer
+VALOR_NULO = -9999.0
+
+# Sistema de referencia: WGS 1984 UTM Zona 19S (EPSG: 32719)
+# → Obligatorio para que las distancias y áreas queden en metros
+SR_UTM19S  = arcpy.SpatialReference(32719)
+
+# Permite sobreescribir archivos de salida si ya existen
+arcpy.env.overwriteOutput = True
+
+SEP  = "=" * 70
+SEP2 = "-" * 70
+
+# ================================================================================
+# FUNCIÓN AUXILIAR — INTERSECCIÓN DE ÁREA
+# ================================================================================
+def interseccion_area(geom_a, geom_b):
+    """
+    Calcula el área de intersección entre dos polígonos.
+    Compatible con ArcGIS Pro (no usa .isEmpty que falla en algunas versiones).
+    Retorna el área en m² o 0.0 si no hay intersección real.
+    """
+    try:
+        inter = geom_a.intersect(geom_b, 4)  # 4 = tipo polígono
+        if inter is None:
+            return 0.0
+        area = inter.area
+        return area if area and area > 0 else 0.0
+    except Exception:
+        return 0.0
+
+# ================================================================================
+# PASO 0 — VERIFICACIONES
+# ================================================================================
+# Verifica que todos los archivos de entrada existen y tienen los campos esperados.
+# Si algo falta, el script se detiene con un mensaje claro antes de procesar.
+print(SEP)
+print("PASO 0 — VERIFICACIONES")
+print(SEP)
+
+# Verificar existencia de shapefiles y sus sistemas de referencia
+for shp, nom in [(borde_orig,"Borde"),(buffer_orig,"Buffer"),
+                 (ciudades_orig,"Ciudades"),(ap_pol_orig,"AP poligono")]:
+    if not arcpy.Exists(shp):
+        raise FileNotFoundError(f"No encontrado [{nom}]: {shp}")
+    sr = arcpy.Describe(shp).spatialReference
+    print(f"  ✓ {nom:<15}: encontrado | SR: {sr.name}")
+
+# Verificar que los campos requeridos existen en cada shapefile
+for shp, nom, campo in [
+    (borde_orig,    "Borde",    col_nombre_ap),
+    (buffer_orig,   "Buffer",   col_nombre_ap),
+    (ap_pol_orig,   "AP pol",   col_nombre_ap),
+    (ciudades_orig, "Ciudades", col_ciudad),
+    (ciudades_orig, "Ciudades", col_poblacion),
+]:
+    campos = [f.name for f in arcpy.ListFields(shp)]
+    if campo not in campos:
+        raise ValueError(f"Campo '{campo}' no encontrado en {nom}.\nDisponibles: {campos}")
+    print(f"  ✓ '{campo}' en {nom}: OK")
+
+# Limpiar carpeta temporal si existe de una corrida anterior.
+# ArcGIS Pro genera archivos .lock que bloquean la eliminación directa;
+# se intenta borrar archivo por archivo ignorando los bloqueados.
+if os.path.exists(carpeta_utm):
+    arcpy.env.workspace = None
+    for archivo in os.listdir(carpeta_utm):
+        try:
+            os.remove(os.path.join(carpeta_utm, archivo))
+        except Exception:
+            pass  # archivos .lock bloqueados por ArcGIS → se ignoran
+    try:
+        shutil.rmtree(carpeta_utm)
+    except Exception:
+        pass  # si la carpeta no se puede borrar completa, makedirs la recrea igual
+os.makedirs(carpeta_utm)
+
+if not os.path.exists(os.path.dirname(output_shp)):
+    os.makedirs(os.path.dirname(output_shp))
+
+# ================================================================================
+# PASO 1 — REPROYECTAR A UTM 19S
+# ================================================================================
+# Todos los shapefiles deben estar en el mismo sistema de referencia métrico
+# para que las distancias y áreas sean correctas.
+# Si ya están en UTM 19S se copian directamente; si no, se reproyectan.
+print(f"\n{SEP}")
+print("PASO 1 — REPROYECTANDO A WGS 1984 UTM ZONA 19S")
+print(SEP)
+
+def reproyectar(shp_in, nombre_out):
+    """Reproyecta un shapefile a UTM 19S o lo copia si ya está en ese SR."""
+    shp_out = os.path.join(carpeta_utm, nombre_out)
+    sr_in   = arcpy.Describe(shp_in).spatialReference
+    if sr_in.factoryCode == 32719:
+        arcpy.management.CopyFeatures(shp_in, shp_out)
+        print(f"  ✓ {nombre_out}: ya en UTM 19S → copiado")
+    else:
+        arcpy.management.Project(shp_in, shp_out, SR_UTM19S)
+        print(f"  ✓ {nombre_out}: reproyectado desde {sr_in.name}")
+    return shp_out
+
+borde_shp    = reproyectar(borde_orig,    "borde_utm.shp")
+buffer_shp   = reproyectar(buffer_orig,   "buffer_utm.shp")
+ciudades_shp = reproyectar(ciudades_orig, "ciudades_utm.shp")
+ap_pol_shp   = reproyectar(ap_pol_orig,   "ap_pol_utm.shp")
+
+# ================================================================================
+# PASO 2 — CREAR SHAPEFILE DE SALIDA
+# ================================================================================
+# Se copia la geometría del borde y se agregan las 13 columnas vacías
+# que serán llenadas en el paso 5.
+print(f"\n{SEP}")
+print("PASO 2 — CREANDO SHAPEFILE DE SALIDA")
+print(SEP)
+
+arcpy.management.CopyFeatures(borde_shp, output_shp)
+
+# Definición de columnas: (nombre, tipo, largo_texto_o_None)
+campos_nuevos = [
+    (C_DIST_M,    "DOUBLE", None),   # distancia en metros
+    (C_DIST_KM,   "DOUBLE", None),   # distancia en km
+    (C_CIUDAD,    "TEXT",   40),     # nombre ciudad (texto hasta 40 chars)
+    (C_POB_CIUDAD,"LONG",   None),   # población ciudad seleccionada
+    (C_POB_TOTAL, "LONG",   None),   # población total en buffer
+    (C_N_CIUDAD,  "SHORT",  None),   # número de ciudades (entero corto)
+    (C_DIST_MIN,  "DOUBLE", None),   # distancia mínima
+    (C_DIST_MAX,  "DOUBLE", None),   # distancia máxima
+    (C_DIST_PROM, "DOUBLE", None),   # promedio
+    (C_DIST_MED,  "DOUBLE", None),   # mediana
+    (C_RANGO,     "DOUBLE", None),   # rango
+    (C_DESV,      "DOUBLE", None),   # desviación estándar
+    (C_SUP_HA,    "DOUBLE", None),   # superficie en hectáreas
+]
+
+for campo, tipo, largo in campos_nuevos:
+    arcpy.management.AddField(
+        output_shp, campo, tipo,
+        field_length=largo if tipo == "TEXT" else None
+    )
+print(f"  ✓ {len(campos_nuevos)} columnas agregadas.")
+
+# ================================================================================
+# PASO 3 — CARGAR DATOS EN MEMORIA
+# ================================================================================
+# Se cargan todas las geometrías en diccionarios/listas Python para evitar
+# consultas repetidas a disco durante el procesamiento por AP.
+# Esto acelera significativamente el cálculo al tener todo en RAM.
+print(f"\n{SEP}")
+print("PASO 3 — CARGANDO DATOS EN MEMORIA")
+print(SEP)
+
+# Bordes: diccionario {nombre_ap: geometría_lineal}
+bordes = {}
+with arcpy.da.SearchCursor(borde_shp, [col_nombre_ap, "SHAPE@"]) as cur:
+    for row in cur:
+        if row[0]: bordes[row[0]] = row[1]
+print(f"  ✓ Bordes          : {len(bordes)}")
+
+# Buffers: diccionario {nombre_ap: geometría_polígono_buffer}
+buffers = {}
+with arcpy.da.SearchCursor(buffer_shp, [col_nombre_ap, "SHAPE@"]) as cur:
+    for row in cur:
+        if row[0]: buffers[row[0]] = row[1]
+print(f"  ✓ Buffers         : {len(buffers)}")
+
+# Áreas de AP en polígono (referencia)
+ap_areas = {}
+with arcpy.da.SearchCursor(ap_pol_shp, [col_nombre_ap, "SHAPE@AREA"]) as cur:
+    for row in cur:
+        if row[0]: ap_areas[row[0]] = row[1]
+print(f"  ✓ Áreas AP pol    : {len(ap_areas)}")
+
+# ── Manzanas censales ──────────────────────────────────────────────────────────
+# Se cargan TODAS las manzanas individualmente con su geometría propia.
+# Esto es necesario para la lógica de ponderación por área:
+#   · todas_manzanas      → lista completa (para POB_URB_TT y SUP_URB_HA)
+#   · manzanas_por_ciudad → agrupadas por ciudad (para POB_URB_MX)
+todas_manzanas      = []
+manzanas_por_ciudad = {}
+
+with arcpy.da.SearchCursor(ciudades_shp, [col_ciudad, col_poblacion, "SHAPE@"]) as cur:
+    for row in cur:
+        nombre = row[0]
+        pob    = int(row[1]) if row[1] is not None else 0
+        geom   = row[2]
+        if geom is None:
+            continue
+        todas_manzanas.append({"nombre": nombre, "pob": pob, "geom": geom})
+        if nombre not in manzanas_por_ciudad:
+            manzanas_por_ciudad[nombre] = []
+        manzanas_por_ciudad[nombre].append({"pob": pob, "geom": geom})
+
+# Resumen por ciudad: suma de todas sus manzanas
+# Se usa para identificar qué ciudades entran al buffer y para el tiebreaker
+ciudades_resumen = {}
+for m in todas_manzanas:
+    n = m["nombre"]
+    if n not in ciudades_resumen:
+        ciudades_resumen[n] = {"nombre": n, "pob_total": 0, "geom": m["geom"]}
+    ciudades_resumen[n]["pob_total"] += m["pob"]
+
+ciudades_lista = sorted(ciudades_resumen.values(), key=lambda x: -x["pob_total"])
+
+print(f"  ✓ Manzanas totales : {len(todas_manzanas)}")
+print(f"  ✓ Ciudades únicas  : {len(ciudades_lista)}")
+print(f"    Top 5:")
+for c in ciudades_lista[:5]:
+    print(f"      {c['nombre']:<30} {c['pob_total']:>10,}")
+
+# ================================================================================
+# PASO 4 — CALCULAR MÉTRICAS POR AP
+# ================================================================================
+# Para cada AP se recorren todas las ciudades y se calcula:
+#   1. Qué ciudades tienen manzanas dentro del buffer (intersección espacial)
+#   2. Cuánta población aporta cada ciudad dentro del buffer (ponderación por área)
+#   3. La ciudad con mayor población ponderada → ciudad seleccionada
+#   4. Estadísticas de distancia (min, max, prom, mediana, rango, desv)
+#   5. Población total y superficie urbana del buffer
+print(f"\n{SEP}")
+print("PASO 4 — CALCULANDO METRICAS POR AP")
+print(SEP)
+
+resultados = {}
+nombres_ap = sorted(set(bordes.keys()) | set(buffers.keys()))
+total      = len(nombres_ap)
+print(f"  Procesando {total} APs...\n")
+
+for i, nombre_ap in enumerate(nombres_ap, 1):
+    geom_buf   = buffers.get(nombre_ap)
+    geom_borde = bordes.get(nombre_ap)
+
+    # Si falta buffer o borde para esta AP, se omite
+    if geom_buf is None or geom_borde is None:
+        print(f"  [{i:>3}/{total}] OMITIDO {nombre_ap} → sin buffer o borde")
+        resultados[nombre_ap] = None
+        continue
+
+    # ── Identificar ciudades en el buffer y calcular su población ponderada ──
+    en_buf = []
+    for c in ciudades_lista:
+        if c["geom"] is None:
+            continue
+        # Descarte rápido: si la geometría resumen de la ciudad no toca el buffer, saltar
+        if geom_buf.disjoint(c["geom"]):
+            continue
+
+        # Distancia desde el borde del AP hasta la geometría resumen de la ciudad
+        dist = geom_borde.distanceTo(c["geom"])
+
+        # Calcular población ponderada: solo manzanas de esta ciudad que intersectan el buffer.
+        # Si una manzana cae PARCIALMENTE en el buffer, se pondera su población por la
+        # fracción de su área que queda dentro:
+        #   pob_aportada = pob_manzana × (área_intersección / área_manzana_total)
+        # Esto es clave para APs como Río Simpson donde Coyhaique entra parcialmente.
+        pob_en_buf = 0.0
+        for m in manzanas_por_ciudad.get(c["nombre"], []):
+            if m["geom"] is None:
+                continue
+            if geom_buf.disjoint(m["geom"]):
+                continue  # manzana fuera del buffer → no aporta
+            area_total = m["geom"].area
+            if area_total <= 0:
+                continue
+            area_inter = interseccion_area(geom_buf, m["geom"])
+            fraccion   = area_inter / area_total
+            pob_en_buf += m["pob"] * fraccion
+
+        pob_en_buf = round(pob_en_buf)
+
+        # Solo incluir ciudades que aportaron población real dentro del buffer
+        if pob_en_buf == 0:
+            continue
+
+        en_buf.append({
+            "nombre":     c["nombre"],
+            "pob_total":  c["pob_total"],   # pob total del censo (tiebreaker)
+            "pob_en_buf": pob_en_buf,        # pob ponderada dentro del buffer → criterio principal
+            "dist":       dist,
+        })
+
+    # ── AP sin ciudades en el buffer ──────────────────────────────────────────
+    if not en_buf:
+        print(f"  [{i:>3}/{total}] {nombre_ap:<42} → sin ciudades en buffer")
+        resultados[nombre_ap] = {
+            "ciudad": "SIN CIUDAD", "dist_m": VALOR_NULO, "dist_km": VALOR_NULO,
+            "pob_ciudad": 0, "pob_total": 0, "n_ciudad": 0,
+            "dist_min": VALOR_NULO, "dist_max": VALOR_NULO,
+            "dist_prom": VALOR_NULO, "dist_med": VALOR_NULO,
+            "rango": VALOR_NULO, "desv": VALOR_NULO,
+            "sup_ha": 0.0,
+        }
+        continue
+
+    # ── Ciudad seleccionada: mayor población ponderada en el buffer ───────────
+    # Tiebreaker: menor distancia al borde (si dos ciudades tienen la misma pob)
+    ciudad_max = max(en_buf, key=lambda x: (x["pob_en_buf"], -x["dist"]))
+
+    # ── Estadísticas de distancia ─────────────────────────────────────────────
+    dists     = [c["dist"] for c in en_buf]
+    dist_min  = min(dists)
+    dist_max  = max(dists)
+    dist_prom = sum(dists) / len(dists)
+    dist_med  = statistics.median(dists)
+    rango     = dist_max - dist_min
+    desv      = statistics.stdev(dists) if len(dists) > 1 else 0.0
+
+    # ── POB_URB_TT: población total ponderada de TODAS las manzanas en buffer ─
+    # Misma lógica de fracción de área, pero sin restricción de ciudad.
+    pob_total_buf = 0.0
+    for m in todas_manzanas:
+        if m["geom"] is None:
+            continue
+        if geom_buf.disjoint(m["geom"]):
+            continue
+        area_total = m["geom"].area
+        if area_total <= 0:
+            continue
+        area_inter = interseccion_area(geom_buf, m["geom"])
+        fraccion   = area_inter / area_total
+        pob_total_buf += m["pob"] * fraccion
+    pob_total_buf = round(pob_total_buf)
+
+    # ── SUP_URB_HA: superficie urbana total en el buffer (hectáreas) ──────────
+    # Se suman las intersecciones geométricas buffer × cada manzana y se convierte a ha.
+    sup_m2 = 0.0
+    for m in todas_manzanas:
+        sup_m2 += interseccion_area(geom_buf, m["geom"])
+    sup_ha = sup_m2 / 10000.0  # m² → hectáreas
+
+    resultados[nombre_ap] = {
+        "ciudad":     ciudad_max["nombre"],
+        "dist_m":     round(ciudad_max["dist"], 3),
+        "dist_km":    round(ciudad_max["dist"] / 1000, 6),
+        "pob_ciudad": ciudad_max["pob_en_buf"],
+        "pob_total":  pob_total_buf,
+        "n_ciudad":   len(en_buf),
+        "dist_min":   round(dist_min, 3),
+        "dist_max":   round(dist_max, 3),
+        "dist_prom":  round(dist_prom, 3),
+        "dist_med":   round(dist_med, 3),
+        "rango":      round(rango, 3),
+        "desv":       round(desv, 3),
+        "sup_ha":     round(sup_ha, 4),
+    }
+
+    r = resultados[nombre_ap]
+    print(f"  [{i:>3}/{total}] {nombre_ap}")
+    print(f"    Ciudad mayor pob en buffer : {r['ciudad']} | pob_buf={r['pob_ciudad']:,} | dist={r['dist_m']:,.1f}m")
+    print(f"    Min/Max/Prom/Med           : {r['dist_min']:,.1f} / {r['dist_max']:,.1f} / {r['dist_prom']:,.1f} / {r['dist_med']:,.1f} m")
+    print(f"    Desv / Rango               : {r['desv']:,.1f} / {r['rango']:,.1f} m")
+    print(f"    Pob total buffer / N       : {r['pob_total']:,} / {r['n_ciudad']}")
+    print(f"    Sup urb (ha)               : {r['sup_ha']:,.2f}")
+
+# ================================================================================
+# PASO 5 — ESCRIBIR EN SHAPEFILE
+# ================================================================================
+# Se recorre el shapefile de salida y se llenan las columnas con los resultados
+# calculados en el paso anterior.
+print(f"\n{SEP}")
+print("PASO 5 — ESCRIBIENDO EN SHAPEFILE DE SALIDA")
+print(SEP)
+
+campos_w = [
+    col_nombre_ap,
+    C_DIST_M, C_DIST_KM, C_CIUDAD,
+    C_POB_CIUDAD, C_POB_TOTAL, C_N_CIUDAD,
+    C_DIST_MIN, C_DIST_MAX, C_DIST_PROM, C_DIST_MED,
+    C_RANGO, C_DESV, C_SUP_HA,
+]
+
+con = 0
+sin = 0
+
+with arcpy.da.UpdateCursor(output_shp, campos_w) as cursor:
+    for row in cursor:
+        n = row[0]
+        r = resultados.get(n)
+        if r is None:
+            sin += 1
+            continue
+        row[1]  = r["dist_m"]
+        row[2]  = r["dist_km"]
+        row[3]  = r["ciudad"]
+        row[4]  = r["pob_ciudad"]
+        row[5]  = r["pob_total"]
+        row[6]  = r["n_ciudad"]
+        row[7]  = r["dist_min"]
+        row[8]  = r["dist_max"]
+        row[9]  = r["dist_prom"]
+        row[10] = r["dist_med"]
+        row[11] = r["rango"]
+        row[12] = r["desv"]
+        row[13] = r["sup_ha"]
+        cursor.updateRow(row)
+        if r["dist_m"] != VALOR_NULO:
+            print(f"  ✓ {n:<42} → {r['ciudad']:<22} {r['dist_m']:,.1f}m | sup={r['sup_ha']:,.2f}ha")
+            con += 1
+        else:
+            print(f"  ⚠ {n:<42} → sin ciudad en buffer")
+            sin += 1
+
+# ================================================================================
+# PASO 6 — LIMPIAR ARCHIVOS TEMPORALES
+# ================================================================================
+try:
+    shutil.rmtree(carpeta_utm)
+    print(f"\n  ✓ Carpeta temporal eliminada.")
+except Exception:
+    pass  # si hay locks activos no es crítico; la carpeta se limpiará en la próxima corrida
+
+# ================================================================================
+# PASO 7 — RESUMEN FINAL
+# ================================================================================
+print(f"\n{SEP}")
+print("RESUMEN FINAL — TODAS LAS APs")
+print(SEP)
+print(f"{'AP':<38} {'CIUDAD':<22} {'DIST_M':>9} {'POB_CP':>9} {'POB_TT':>9} {'N':>3} {'SUP_HA':>10}")
+print(SEP2)
+
+with arcpy.da.SearchCursor(output_shp, campos_w) as cursor:
+    filas = sorted(cursor, key=lambda r: (r[1] in (None, VALOR_NULO), r[1] or 0))
+    for row in filas:
+        dm  = f"{row[1]:,.0f}"  if row[1] not in (None, VALOR_NULO) else "N/A"
+        pc  = f"{row[4]:,}"     if row[4] else "0"
+        pt  = f"{row[5]:,}"     if row[5] else "0"
+        nc  = str(row[6])       if row[6] else "0"
+        sha = f"{row[13]:,.2f}" if row[13] else "0"
+        print(f"{str(row[0]):<38} {str(row[3]):<22} {dm:>9} {pc:>9} {pt:>9} {nc:>3} {sha:>10}")
+
+print(SEP2)
+print(f"\n  APs con datos  : {con}")
+print(f"  APs sin ciudad : {sin}")
+print(f"\n✓ COMPLETADO → {output_shp}")
+print(f"""
+  Columnas generadas:
+    DIST_URB_M → distancia (m) borde → ciudad con mayor pob urbana en buffer
+    DIST_URB_K → distancia (km)
+    NOM_URB_MX → nombre ciudad con mayor pob urbana en buffer
+    POB_URB_MX → pob urbana de esa ciudad (manzanas ponderadas por área)
+    POB_URB_TT → pob urbana total todas las ciudades en buffer (ponderada)
+    N_CIUDADES → número de ciudades urbanas en buffer
+    DMIN_URB_M → distancia (m) a ciudad más cercana al borde
+    DMAX_URB_M → distancia (m) a ciudad más lejana en buffer
+    DPROM_URB  → promedio distancias a todas las ciudades (m)
+    DMED_URB_M → mediana distancias a todas las ciudades (m)
+    RANG_URB_M → rango dist_max - dist_min (m)
+    DESV_URB_M → desviación estándar distancias (m)
+    SUP_URB_HA → superficie urbana total en buffer (hectáreas)
+""")
