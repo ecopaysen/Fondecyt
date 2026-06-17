@@ -1,0 +1,29 @@
+import arcpy
+
+intersect_shp = r"C:\Users\valen\Desktop\Datos_censo_2024\Objetivo_01\Manzanas\Manzanas_metadata\Manzanas_opcion_02\02_Intersect\Manz_Buf_1km.shp"
+
+# Encontrar el NOMBRE_TOT con el valor más alto
+suma_por_ap = {}
+with arcpy.da.SearchCursor(intersect_shp, ["NOMBRE_TOT", "PER_MZ_P"]) as cur:
+    for nombre, per in cur:
+        per = per if per else 0
+        suma_por_ap[nombre] = suma_por_ap.get(nombre, 0) + per
+
+# Top 5 más altos
+top5 = sorted(suma_por_ap.items(), key=lambda x: x[1], reverse=True)[:5]
+print("Top 5 AP con más población:")
+for nombre, total in top5:
+    print(f"  {nombre}: {total:.2f}")
+
+# Ver fragmentos de ese AP en detalle
+ap_revisar = top5[0][0]
+print(f"\nFragmentos de '{ap_revisar}':")
+count = 0
+with arcpy.da.SearchCursor(intersect_shp, ["NOMBRE_TOT", "FID_MZ", "MZ_HA", "MZ_HA_F", "MZ_RATIO_P", "PER_MZ", "PER_MZ_P", "TP_MZ"]) as cur:
+    for row in cur:
+        if row[0] == ap_revisar:
+            print(f"  FID_MZ={row[1]} MZ_HA={row[2]:.4f} MZ_HA_F={row[3]:.4f} RATIO={row[4]:.4f} PER_MZ={row[5]} PER_MZ_P={row[6]:.2f} TP={row[7]}")
+            count += 1
+            if count >= 15:
+                break
+print(f"\nTotal fragmentos: {count} (mostrando primeros 15)")
