@@ -1,0 +1,191 @@
+import arcpy
+import os
+
+arcpy.env.overwriteOutput = True
+
+manzanas_v02 = r"C:\Users\valen\Desktop\Datos_censo_2024\Objetivo_01\Manzanas\Manzanas_metadata\Manzanas_opcion_02\01_Manzanas\Manzanas_v02.shp"
+buffer_dir   = r"C:\Users\valen\Desktop\Fondecyt\areas_protegidas_totales_actualizadas-20251109T203707Z-1-001\Buffer\Buffer_consecutivos\Buffer_clip\Buffer_clip_modificacion_v6"
+salida_dir   = r"C:\Users\valen\Desktop\Datos_censo_2024\Objetivo_01\Manzanas\Manzanas_metadata\Manzanas_opcion_02\02_Intersect"
+temp_dir     = r"C:\Users\valen\Desktop\Datos_censo_2024\Objetivo_01\Manzanas\Manzanas_metadata\Manzanas_opcion_02\04_UTM_reproyectados"
+
+sr_utm19s = arcpy.SpatialReference(32719)
+
+for d in [salida_dir, temp_dir]:
+    if not os.path.exists(d):
+        os.makedirs(d)
+
+CATEGORIAS = {
+    "PN": "Parque",
+    "RN": "Reserva",
+    "MN": "Monumento"
+}
+
+ORDEN_INTERSECT = [
+    "NOMBRE_TOT", "NOMBRE_UNI", "REGION", "PROVINCIA", "COMUNA", "CATEGORIA",
+    "DECRETO_VI", "ANIO_CREAC", "CAT_PREV", "CAMB_SUP",
+    "AREA_HA", "PRIM_METR", "LONGITUD", "LATITUD",
+    "ALT_MIN", "ALT_MAX", "ALT_MEAN", "ALT_MED", "ALT_STD",
+    "TP_MZ", "SUB_TP_MZ",
+    "MZ_HA", "MZ_PERI", "PER_MZ", "FID_MZ",
+    "MZ_HA_F", "MZ_RATIO_P", "MZ_PCT_P", "PER_MZ_P"
+]
+
+# Reproyectar manzanas (ya viene en UTM probablemente, pero aseguramos)
+manzanas_utm = os.path.join(temp_dir, "Manzanas_v02_UTM.shp")
+arcpy.management.Project(manzanas_v02, manzanas_utm, sr_utm19s)
+
+# Diccionario OID → area_ha, per_mz
+oid_field = arcpy.Describe(manzanas_utm).OIDFieldName
+oid_to_data = {}
+with arcpy.da.SearchCursor(manzanas_utm, [oid_field, "MZ_HA", "PER_MZ"]) as cur:
+    for oid, area_ha, per_mz in cur:
+        oid_to_data[oid] = {
+            "area_ha": area_ha if area_ha else 0,
+            "per_mz":  per_mz  if per_mz  else 0
+        }
+print(f"Manzanas cargadas: {len(oid_to_data)}")
+
+for km in range(1, 11):
+    buffer_shp = os.path.join(buffer_dir, f"Buffer_{km}km_clip.shp")
+    if not arcpy.Exists(buffer_shp):
+        print(f"[AVISO] No encontrado: {buffer_shp}")
+        continue
+
+    print(f"\nProcesando buffer {km}km...")
+
+    # Reproyectar buffer
+    buffer_utm = os.path.join(temp_dir, f"int_Buffer_{km}km_UTM19S.shp")
+    arcpy.management.Project(buffer_shp, buffer_utm, sr_utm19s)
+
+    # Intersectar
+    intersect_tmp = os.path.join(temp_dir, f"tmp_Manz_Buf_{km}km.shp")
+    arcpy.analysis.Intersect(
+        in_features=[manzanas_utm, buffer_utm],
+        out_feature_class=intersect_tmp,
+        join_attributes="ALL"
+    )
+
+    # Área del fragmento
+    arcpy.management.AddField(intersect_tmp, "MZ_HA_F", "DOUBLE")
+    arcpy.management.CalculateGeometryAttributes(
+        intersect_tmp, [["MZ_HA_F", "AREA"]], area_unit="HECTARES"
+    )
+
+    # Detectar OID de manzanas
+    campos_i = [f.name for f in arcpy.ListFields(intersect_tmp)]
+    oid_ref = None
+    for c in campos_i:
+        if c.upper().startswith("FID_") and "MANZ" in c.upper():
+            oid_ref = c
+            break
+    if not oid_ref:
+        for c in campos_i:
+            if c.upper().startswith("FID_") and "BUFF" not in c.upper():
+                oid_ref = c
+                break
+
+    if not oid_ref:
+        print(f"  [ERROR] No se encontró OID manzanas. Campos: {campos_i}")
+        continue
+
+    # Agregar campos calculados
+    campos_i = [f.name for f in arcpy.ListFields(intersect_tmp)]
+    for campo, tipo in [("FID_MZ", "INTEGER"), ("MZ_RATIO_P", "DOUBLE"),
+                        ("MZ_PCT_P", "DOUBLE"), ("PER_MZ_P", "DOUBLE")]:
+        if campo not in campos_i:
+            arcpy.management.AddField(intersect_tmp, campo, tipo)
+
+    # Calcular fracción y población ponderada
+    with arcpy.da.UpdateCursor(intersect_tmp,
+                               [oid_ref, "MZ_HA_F", "FID_MZ",
+                                "MZ_RATIO_P", "MZ_PCT_P", "PER_MZ_P"]) as cur:
+        for row in cur:
+            oid_orig  = row[0]
+            area_frag = row[1]
+
+            if oid_orig in oid_to_data:
+                area_orig = oid_to_data[oid_orig]["area_ha"]
+                per_mz    = oid_to_data[oid_orig]["per_mz"]
+                fraccion  = min(area_frag / area_orig, 1.0) if area_orig > 0 else 0
+            else:
+                fraccion = 0
+                per_mz   = 0
+
+            row[2] = oid_orig
+            row[3] = round(fraccion, 6)
+            row[4] = round(fraccion * 100, 2)
+            row[5] = round(per_mz * fraccion, 2)
+            cur.updateRow(row)
+
+    # Exportar reordenado
+    campos_existentes = [f.name for f in arcpy.ListFields(intersect_tmp)
+                         if f.type not in ("OID", "Geometry")]
+
+    fm = arcpy.FieldMappings()
+
+    def add_fm(src, campo_in, campo_out=None):
+        if campo_in not in campos_existentes:
+            print(f"  [AVISO] Campo no encontrado: {campo_in}")
+            return
+        fmap = arcpy.FieldMap()
+        fmap.addInputField(src, campo_in)
+        if campo_out:
+            f = fmap.outputField
+            f.name = campo_out
+            fmap.outputField = f
+        fm.addFieldMap(fmap)
+
+    # Campos del buffer vienen con sufijo _1
+    add_fm(intersect_tmp, "NOMBRE_TOT")
+    add_fm(intersect_tmp, "NOMBRE_T_1", "NOMBRE_UNI") if "NOMBRE_T_1" in campos_existentes else add_fm(intersect_tmp, "NOMBRE_UNI")
+    add_fm(intersect_tmp, "REGION_1",   "REGION")     if "REGION_1"   in campos_existentes else add_fm(intersect_tmp, "REGION")
+    add_fm(intersect_tmp, "PROVINCI_1", "PROVINCIA")  if "PROVINCI_1" in campos_existentes else add_fm(intersect_tmp, "PROVINCIA")
+    add_fm(intersect_tmp, "COMUNA_1",   "COMUNA")     if "COMUNA_1"   in campos_existentes else add_fm(intersect_tmp, "COMUNA")
+    add_fm(intersect_tmp, "CATEGORIA")
+    add_fm(intersect_tmp, "DECRETO_VI")
+    add_fm(intersect_tmp, "ANIO_CREAC")
+    add_fm(intersect_tmp, "CAT_PREV")
+    add_fm(intersect_tmp, "CAMB_SUP")
+    add_fm(intersect_tmp, "AREA_HA")
+    add_fm(intersect_tmp, "PRIM_METR")
+    add_fm(intersect_tmp, "LONGITUD")
+    add_fm(intersect_tmp, "LATITUD")
+    add_fm(intersect_tmp, "ALT_MIN")
+    add_fm(intersect_tmp, "ALT_MAX")
+    add_fm(intersect_tmp, "ALT_MEAN")
+    add_fm(intersect_tmp, "ALT_MED")
+    add_fm(intersect_tmp, "ALT_STD")
+    add_fm(intersect_tmp, "TP_MZ")
+    add_fm(intersect_tmp, "SUB_TP_MZ")
+    add_fm(intersect_tmp, "MZ_HA")
+    add_fm(intersect_tmp, "MZ_PERI")
+    add_fm(intersect_tmp, "PER_MZ")
+    add_fm(intersect_tmp, "FID_MZ")
+    add_fm(intersect_tmp, "MZ_HA_F")
+    add_fm(intersect_tmp, "MZ_RATIO_P")
+    add_fm(intersect_tmp, "MZ_PCT_P")
+    add_fm(intersect_tmp, "PER_MZ_P")
+
+    salida_sin_orden = os.path.join(temp_dir, f"tmp_export_{km}km.shp")
+    arcpy.conversion.ExportFeatures(intersect_tmp, salida_sin_orden, field_mapping=fm)
+
+    # Ordenar alfabéticamente por NOMBRE_TOT
+    salida_final = os.path.join(salida_dir, f"Manz_Buf_{km}km.shp")
+    arcpy.management.Sort(
+        in_dataset=salida_sin_orden,
+        out_dataset=salida_final,
+        sort_field=[["NOMBRE_TOT", "ASCENDING"]]
+    )
+
+    arcpy.management.Delete(intersect_tmp)
+    arcpy.management.Delete(buffer_utm)
+    arcpy.management.Delete(salida_sin_orden)
+
+    print(f"  ✓ Manz_Buf_{km}km.shp guardado")
+
+print("\nCampos en Manz_Buf_1km.shp:")
+for f in arcpy.ListFields(os.path.join(salida_dir, "Manz_Buf_1km.shp")):
+    if f.type not in ("OID", "Geometry"):
+        print(f"  {f.name}")
+
+print("\n✓ Proceso completado")
