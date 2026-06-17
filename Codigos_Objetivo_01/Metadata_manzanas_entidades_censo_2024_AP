@@ -1,0 +1,130 @@
+import arcpy
+import os
+
+arcpy.env.overwriteOutput = True
+
+join_out   = r"C:\Users\valen\Desktop\Datos_censo_2024\Objetivo_01\Manzanas\Manzanas_metadata\Manzanas_opcion_02\Manzanas_Entidades_join.shp"
+salida_dir = r"C:\Users\valen\Desktop\Datos_censo_2024\Objetivo_01\Manzanas\Manzanas_metadata\Manzanas_opcion_02\01_Manzanas"
+salida_tmp = os.path.join(salida_dir, "Manzanas_v02_tmp.shp")
+salida     = os.path.join(salida_dir, "Manzanas_v02.shp")
+
+CATEGORIAS_RURAL = {
+    "Asentamiento Minero", "Asentamiento Pesquero", "Veranada-Majada-Aguada",
+    "Parcela de Agrado", "Comunidad Indígena", "Fundo-Estancia-Hacienda",
+    "Caserío", "Indeterminada", "Parcela-Hijuela", "Otros"
+}
+CATEGORIAS_URBANO = {"Pueblo", "Ciudad"}
+
+MAPEO_TIPO_MZ = {
+    "URBANO": "Urbano",
+    "ALDEA":  "Rural",
+    "RURAL":  "Rural"
+}
+
+# ── Calcular TP_MNZ ────────────────────────────────────────────────────────────
+campos = [f.name for f in arcpy.ListFields(join_out)]
+if "TP_MNZ" not in campos:
+    arcpy.management.AddField(join_out, "TP_MNZ", "TEXT", field_length=10)
+
+with arcpy.da.UpdateCursor(join_out, ["TIPO_MZ", "CATEGORIA", "TP_MNZ"]) as cur:
+    for row in cur:
+        tipo_mz = (row[0] or "").strip().upper()
+        categoria = (row[1] or "").strip()
+
+        if tipo_mz in MAPEO_TIPO_MZ:
+            row[2] = MAPEO_TIPO_MZ[tipo_mz]
+        elif categoria in CATEGORIAS_RURAL:
+            row[2] = "Rural"
+        elif categoria in CATEGORIAS_URBANO:
+            row[2] = "Urbano"
+        else:
+            row[2] = "Sin dato"
+        cur.updateRow(row)
+print("TP_MNZ calculado")
+
+# ── PER_MNZ desde n_per ────────────────────────────────────────────────────────
+campos = [f.name for f in arcpy.ListFields(join_out)]
+if "PER_MNZ" not in campos:
+    arcpy.management.AddField(join_out, "PER_MNZ", "DOUBLE")
+    arcpy.management.CalculateField(join_out, "PER_MNZ", "!n_per!", "PYTHON3")
+print("PER_MNZ calculado")
+
+# ── SUB_TP_MNZ desde CATEGORIA censal ─────────────────────────────────────────
+campos = [f.name for f in arcpy.ListFields(join_out)]
+if "SUB_TP_MNZ" not in campos:
+    arcpy.management.AddField(join_out, "SUB_TP_MNZ", "TEXT", field_length=254)
+    arcpy.management.CalculateField(join_out, "SUB_TP_MNZ", "!CATEGORIA!", "PYTHON3")
+print("SUB_TP_MNZ calculado")
+
+# ── MNZ_HA y MNZ_PERI ──────────────────────────────────────────────────────────
+campos = [f.name for f in arcpy.ListFields(join_out)]
+if "MNZ_HA" not in campos:
+    arcpy.management.AddField(join_out, "MNZ_HA", "DOUBLE")
+if "MNZ_PERI" not in campos:
+    arcpy.management.AddField(join_out, "MNZ_PERI", "DOUBLE")
+arcpy.management.CalculateGeometryAttributes(
+    join_out,
+    [["MNZ_HA", "AREA"], ["MNZ_PERI", "PERIMETER_LENGTH"]],
+    area_unit="HECTARES", length_unit="METERS"
+)
+print("MNZ_HA y MNZ_PERI calculados")
+
+# ── EXPORTAR REORDENADO ────────────────────────────────────────────────────────
+fm = arcpy.FieldMappings()
+
+def add_field(src, campo_in, campo_out=None):
+    campos_ex = [f.name for f in arcpy.ListFields(src)]
+    if campo_in not in campos_ex:
+        print(f"  [AVISO] Campo no encontrado: {campo_in}")
+        return
+    fmap = arcpy.FieldMap()
+    fmap.addInputField(src, campo_in)
+    if campo_out:
+        f = fmap.outputField
+        f.name = campo_out
+        fmap.outputField = f
+    fm.addFieldMap(fmap)
+
+campos_join = [f.name for f in arcpy.ListFields(join_out)]
+add_field(join_out, "NOMBRE_TOT")
+add_field(join_out, "NOMBRE_UNI")
+add_field(join_out, "REGION_1",   "REGION")     if "REGION_1"   in campos_join else add_field(join_out, "REGION")
+add_field(join_out, "PROVINCI_1", "PROVINCIA")  if "PROVINCI_1" in campos_join else add_field(join_out, "PROVINCIA")
+add_field(join_out, "COMUNA_1",   "COMUNA")     if "COMUNA_1"   in campos_join else add_field(join_out, "COMUNA")
+add_field(join_out, "CATEGORI_1", "CATEGORIA")  if "CATEGORI_1" in campos_join else add_field(join_out, "CATEGORIA")
+add_field(join_out, "DECRETO_VI")
+add_field(join_out, "ANIO_CREAC")
+add_field(join_out, "CAT_PREV")
+add_field(join_out, "CAMB_SUP")
+add_field(join_out, "AREA_HA")
+add_field(join_out, "PRIM_METR")
+add_field(join_out, "LONGITUD")
+add_field(join_out, "LATITUD")
+add_field(join_out, "ALT_MIN")
+add_field(join_out, "ALT_MAX")
+add_field(join_out, "ALT_MEAN")
+add_field(join_out, "ALT_MED")
+add_field(join_out, "ALT_STD")
+add_field(join_out, "TP_MNZ")
+add_field(join_out, "SUB_TP_MNZ")
+add_field(join_out, "MNZ_HA")
+add_field(join_out, "MNZ_PERI")
+add_field(join_out, "PER_MNZ")
+
+arcpy.conversion.ExportFeatures(join_out, salida_tmp, field_mapping=fm)
+print(f"Export temporal: {arcpy.management.GetCount(salida_tmp)[0]} registros")
+
+# ── ORDENAR ALFABÉTICAMENTE POR NOMBRE_TOT ────────────────────────────────────
+arcpy.management.Sort(
+    in_dataset=salida_tmp,
+    out_dataset=salida,
+    sort_field=[["NOMBRE_TOT", "ASCENDING"]]
+)
+arcpy.management.Delete(salida_tmp)
+
+print(f"\nCampos en Manzanas_v02.shp:")
+for f in arcpy.ListFields(salida):
+    if f.type not in ("OID", "Geometry"):
+        print(f"  {f.name}")
+
+print(f"\n✓ Manzanas_v02.shp guardado y ordenado — {arcpy.management.GetCount(salida)[0]} registros")
