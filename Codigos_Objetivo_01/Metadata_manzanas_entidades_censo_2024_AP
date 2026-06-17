@@ -21,12 +21,12 @@ MAPEO_TIPO_MZ = {
     "RURAL":  "Rural"
 }
 
-# ── Calcular TP_MNZ ────────────────────────────────────────────────────────────
+# ── Calcular TP_MZ ─────────────────────────────────────────────────────────────
 campos = [f.name for f in arcpy.ListFields(join_out)]
-if "TP_MNZ" not in campos:
-    arcpy.management.AddField(join_out, "TP_MNZ", "TEXT", field_length=10)
+if "TP_MZ" not in campos:
+    arcpy.management.AddField(join_out, "TP_MZ", "TEXT", field_length=10)
 
-with arcpy.da.UpdateCursor(join_out, ["TIPO_MZ", "CATEGORIA", "TP_MNZ"]) as cur:
+with arcpy.da.UpdateCursor(join_out, ["TIPO_MZ", "CATEGORIA", "TP_MZ"]) as cur:
     for row in cur:
         tipo_mz = (row[0] or "").strip().upper()
         categoria = (row[1] or "").strip()
@@ -40,34 +40,34 @@ with arcpy.da.UpdateCursor(join_out, ["TIPO_MZ", "CATEGORIA", "TP_MNZ"]) as cur:
         else:
             row[2] = "Sin dato"
         cur.updateRow(row)
-print("TP_MNZ calculado")
+print("TP_MZ calculado")
 
-# ── PER_MNZ desde n_per ────────────────────────────────────────────────────────
+# ── PER_MZ desde n_per ─────────────────────────────────────────────────────────
 campos = [f.name for f in arcpy.ListFields(join_out)]
-if "PER_MNZ" not in campos:
-    arcpy.management.AddField(join_out, "PER_MNZ", "DOUBLE")
-    arcpy.management.CalculateField(join_out, "PER_MNZ", "!n_per!", "PYTHON3")
-print("PER_MNZ calculado")
+if "PER_MZ" not in campos:
+    arcpy.management.AddField(join_out, "PER_MZ", "DOUBLE")
+    arcpy.management.CalculateField(join_out, "PER_MZ", "!n_per!", "PYTHON3")
+print("PER_MZ calculado")
 
-# ── SUB_TP_MNZ desde CATEGORIA censal ─────────────────────────────────────────
+# ── SUB_TP_MZ desde CATEGORIA censal ──────────────────────────────────────────
 campos = [f.name for f in arcpy.ListFields(join_out)]
-if "SUB_TP_MNZ" not in campos:
-    arcpy.management.AddField(join_out, "SUB_TP_MNZ", "TEXT", field_length=254)
-    arcpy.management.CalculateField(join_out, "SUB_TP_MNZ", "!CATEGORIA!", "PYTHON3")
-print("SUB_TP_MNZ calculado")
+if "SUB_TP_MZ" not in campos:
+    arcpy.management.AddField(join_out, "SUB_TP_MZ", "TEXT", field_length=254)
+    arcpy.management.CalculateField(join_out, "SUB_TP_MZ", "!CATEGORIA!", "PYTHON3")
+print("SUB_TP_MZ calculado")
 
-# ── MNZ_HA y MNZ_PERI ──────────────────────────────────────────────────────────
+# ── MZ_HA y MZ_PERI ─────────────────────────────────────────────────────────────
 campos = [f.name for f in arcpy.ListFields(join_out)]
-if "MNZ_HA" not in campos:
-    arcpy.management.AddField(join_out, "MNZ_HA", "DOUBLE")
-if "MNZ_PERI" not in campos:
-    arcpy.management.AddField(join_out, "MNZ_PERI", "DOUBLE")
+if "MZ_HA" not in campos:
+    arcpy.management.AddField(join_out, "MZ_HA", "DOUBLE")
+if "MZ_PERI" not in campos:
+    arcpy.management.AddField(join_out, "MZ_PERI", "DOUBLE")
 arcpy.management.CalculateGeometryAttributes(
     join_out,
-    [["MNZ_HA", "AREA"], ["MNZ_PERI", "PERIMETER_LENGTH"]],
+    [["MZ_HA", "AREA"], ["MZ_PERI", "PERIMETER_LENGTH"]],
     area_unit="HECTARES", length_unit="METERS"
 )
-print("MNZ_HA y MNZ_PERI calculados")
+print("MZ_HA y MZ_PERI calculados")
 
 # ── EXPORTAR REORDENADO ────────────────────────────────────────────────────────
 fm = arcpy.FieldMappings()
@@ -105,11 +105,11 @@ add_field(join_out, "ALT_MAX")
 add_field(join_out, "ALT_MEAN")
 add_field(join_out, "ALT_MED")
 add_field(join_out, "ALT_STD")
-add_field(join_out, "TP_MNZ")
-add_field(join_out, "SUB_TP_MNZ")
-add_field(join_out, "MNZ_HA")
-add_field(join_out, "MNZ_PERI")
-add_field(join_out, "PER_MNZ")
+add_field(join_out, "TP_MZ")
+add_field(join_out, "SUB_TP_MZ")
+add_field(join_out, "MZ_HA")
+add_field(join_out, "MZ_PERI")
+add_field(join_out, "PER_MZ")
 
 arcpy.conversion.ExportFeatures(join_out, salida_tmp, field_mapping=fm)
 print(f"Export temporal: {arcpy.management.GetCount(salida_tmp)[0]} registros")
