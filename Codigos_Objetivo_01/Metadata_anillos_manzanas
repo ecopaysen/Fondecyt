@@ -1,0 +1,183 @@
+import arcpy
+import os
+import time
+
+arcpy.env.overwriteOutput = True
+
+manzanas_clip = r"C:\Users\valen\Desktop\Datos_censo_2024\Objetivo_01\Manzanas\Manzanas_metadata\Anillos\Anillos_v02\04_UTM_reproyectados\v02_ani_Manzanas_clip_TOTAL.shp"
+anillo_dir    = r"C:\Users\valen\Desktop\Fondecyt\areas_protegidas_totales_actualizadas-20251109T203707Z-1-001\Anillos\Anillos_consecutivos\Anillos_clip_modificacion"
+salida_base   = r"C:\Users\valen\Desktop\Datos_censo_2024\Objetivo_01\Manzanas\Manzanas_metadata\Anillos\Anillos_v02"
+
+dir_manzanas = os.path.join(salida_base, "01_Manzanas")
+temp_dir     = os.path.join(salida_base, "04_UTM_reproyectados")
+
+sr_utm19s = arcpy.SpatialReference(32719)
+
+CATEGORIAS_RURAL = {
+    "Asentamiento Minero", "Asentamiento Pesquero", "Veranada-Majada-Aguada",
+    "Parcela de Agrado", "Comunidad Indígena", "Fundo-Estancia-Hacienda",
+    "Caserío", "Indeterminada", "Parcela-Hijuela", "Otros"
+}
+CATEGORIAS_URBANO = {"Pueblo", "Ciudad"}
+
+MAPEO_TIPO_MZ = {
+    "URBANO": "Urbano",
+    "ALDEA":  "Rural",
+    "RURAL":  "Rural"
+}
+
+def log(msg):
+    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+
+# ── PASO 1: REPROYECTAR MANZANAS ──────────────────────────────────────────────
+log("Reproyectando manzanas...")
+manzanas_utm = os.path.join(temp_dir, "v02_ani_Manzanas_UTM19S.shp")
+arcpy.management.Project(manzanas_clip, manzanas_utm, sr_utm19s)
+log(f"  ✓ {arcpy.management.GetCount(manzanas_utm)[0]} registros")
+
+# ── PASO 2: UNIR Y REPROYECTAR ANILLOS (para el join) ─────────────────────────
+log("Uniendo anillos...")
+anillos_lista = []
+for km in range(1, 11):
+    a = os.path.join(anillo_dir, f"Anillos_{km}km_clip.shp")
+    if arcpy.Exists(a):
+        anillos_lista.append(a)
+
+anillos_merge = os.path.join(temp_dir, "v02_ani_Anillos_merge.shp")
+arcpy.management.Merge(inputs=anillos_lista, output=anillos_merge)
+log(f"  ✓ Merge: {arcpy.management.GetCount(anillos_merge)[0]} registros")
+
+log("Reproyectando anillos...")
+anillos_utm = os.path.join(temp_dir, "v02_ani_Anillos_merge_UTM19S.shp")
+arcpy.management.Project(anillos_merge, anillos_utm, sr_utm19s)
+log("  ✓ Reproyectado")
+
+# ── PASO 3: SPATIAL JOIN → trae NOMBRE_TOT ───────────────────────────────────
+log("Iniciando spatial join...")
+t0 = time.time()
+join_out = os.path.join(temp_dir, "v02_ani_Manzanas_join.shp")
+arcpy.analysis.SpatialJoin(
+    target_features=manzanas_utm,
+    join_features=anillos_utm,
+    out_feature_class=join_out,
+    join_operation="JOIN_ONE_TO_ONE",
+    join_type="KEEP_ALL",
+    match_option="LARGEST_OVERLAP"
+)
+log(f"  ✓ Join completado en {time.time()-t0:.1f}s — {arcpy.management.GetCount(join_out)[0]} registros")
+
+count_null = 0
+with arcpy.da.SearchCursor(join_out, ["NOMBRE_TOT"]) as cur:
+    for row in cur:
+        if not row[0]:
+            count_null += 1
+log(f"Sin NOMBRE_TOT: {count_null}")
+
+# ── PASO 4: CALCULAR CAMPOS ───────────────────────────────────────────────────
+log("Calculando TP_MZ...")
+campos = [f.name for f in arcpy.ListFields(join_out)]
+if "TP_MZ" not in campos:
+    arcpy.management.AddField(join_out, "TP_MZ", "TEXT", field_length=10)
+with arcpy.da.UpdateCursor(join_out, ["TIPO_MZ", "CATEGORIA", "TP_MZ"]) as cur:
+    for row in cur:
+        tipo_mz   = (row[0] or "").strip().upper()
+        categoria = (row[1] or "").strip()
+        if tipo_mz in MAPEO_TIPO_MZ:
+            row[2] = MAPEO_TIPO_MZ[tipo_mz]
+        elif categoria in CATEGORIAS_RURAL:
+            row[2] = "Rural"
+        elif categoria in CATEGORIAS_URBANO:
+            row[2] = "Urbano"
+        else:
+            row[2] = "Sin dato"
+        cur.updateRow(row)
+log("  ✓ TP_MZ calculado")
+
+log("Calculando PER_MZ...")
+campos = [f.name for f in arcpy.ListFields(join_out)]
+if "PER_MZ" not in campos:
+    arcpy.management.AddField(join_out, "PER_MZ", "DOUBLE")
+    arcpy.management.CalculateField(join_out, "PER_MZ", "!n_per!", "PYTHON3")
+log("  ✓ PER_MZ calculado")
+
+log("Calculando SUB_TP_MZ...")
+campos = [f.name for f in arcpy.ListFields(join_out)]
+if "SUB_TP_MZ" not in campos:
+    arcpy.management.AddField(join_out, "SUB_TP_MZ", "TEXT", field_length=254)
+    arcpy.management.CalculateField(join_out, "SUB_TP_MZ", "!CATEGORIA!", "PYTHON3")
+log("  ✓ SUB_TP_MZ calculado")
+
+log("Calculando MZ_HA y MZ_PERI...")
+if "MZ_HA" not in campos:
+    arcpy.management.AddField(join_out, "MZ_HA", "DOUBLE")
+if "MZ_PERI" not in campos:
+    arcpy.management.AddField(join_out, "MZ_PERI", "DOUBLE")
+arcpy.management.CalculateGeometryAttributes(
+    join_out,
+    [["MZ_HA", "AREA"], ["MZ_PERI", "PERIMETER_LENGTH"]],
+    area_unit="HECTARES", length_unit="METERS"
+)
+log("  ✓ MZ_HA y MZ_PERI calculados")
+
+# ── PASO 5: EXPORTAR REORDENADO ───────────────────────────────────────────────
+log("Exportando reordenado...")
+fm = arcpy.FieldMappings()
+
+def add_field(src, campo_in, campo_out=None):
+    campos_ex = [f.name for f in arcpy.ListFields(src)]
+    if campo_in not in campos_ex:
+        log(f"  [AVISO] Campo no encontrado: {campo_in}")
+        return
+    fmap = arcpy.FieldMap()
+    fmap.addInputField(src, campo_in)
+    if campo_out:
+        f = fmap.outputField
+        f.name = campo_out
+        fmap.outputField = f
+    fm.addFieldMap(fmap)
+
+campos_join = [f.name for f in arcpy.ListFields(join_out)]
+add_field(join_out, "NOMBRE_TOT")
+add_field(join_out, "NOMBRE_UNI")
+add_field(join_out, "REGION_1",   "REGION")     if "REGION_1"   in campos_join else add_field(join_out, "REGION")
+add_field(join_out, "PROVINCI_1", "PROVINCIA")  if "PROVINCI_1" in campos_join else add_field(join_out, "PROVINCIA")
+add_field(join_out, "COMUNA_1",   "COMUNA")     if "COMUNA_1"   in campos_join else add_field(join_out, "COMUNA")
+add_field(join_out, "CATEGORI_1", "CATEGORIA")  if "CATEGORI_1" in campos_join else add_field(join_out, "CATEGORIA")
+add_field(join_out, "DECRETO_VI")
+add_field(join_out, "ANIO_CREAC")
+add_field(join_out, "CAT_PREV")
+add_field(join_out, "CAMB_SUP")
+add_field(join_out, "AREA_HA")
+add_field(join_out, "PRIM_METR")
+add_field(join_out, "LONGITUD")
+add_field(join_out, "LATITUD")
+add_field(join_out, "ALT_MIN")
+add_field(join_out, "ALT_MAX")
+add_field(join_out, "ALT_MEAN")
+add_field(join_out, "ALT_MED")
+add_field(join_out, "ALT_STD")
+add_field(join_out, "TP_MZ")
+add_field(join_out, "SUB_TP_MZ")
+add_field(join_out, "MZ_HA")
+add_field(join_out, "MZ_PERI")
+add_field(join_out, "PER_MZ")
+
+salida_tmp = os.path.join(dir_manzanas, "Manzanas_v02_tmp.shp")
+arcpy.conversion.ExportFeatures(join_out, salida_tmp, field_mapping=fm)
+log(f"  ✓ Export temporal: {arcpy.management.GetCount(salida_tmp)[0]} registros")
+
+log("Ordenando alfabéticamente...")
+salida = os.path.join(dir_manzanas, "Manzanas_v02.shp")
+arcpy.management.Sort(
+    in_dataset=salida_tmp,
+    out_dataset=salida,
+    sort_field=[["NOMBRE_TOT", "ASCENDING"]]
+)
+arcpy.management.Delete(salida_tmp)
+
+log(f"\nCampos en Manzanas_v02.shp:")
+for f in arcpy.ListFields(salida):
+    if f.type not in ("OID", "Geometry"):
+        print(f"  {f.name}")
+
+log(f"✓ Manzanas_v02.shp guardado en {dir_manzanas} — {arcpy.management.GetCount(salida)[0]} registros")
