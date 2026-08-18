@@ -1,533 +1,226 @@
-#!/usr/bin/env python3
-"""
-================================================================================
-RECLASIFICACIÓN DE RASTERS MAPBIOMAS - TEST 2 (ENFOQUE RESTRICTIVO)
-================================================================================
+## =============================================================================
+## RECLASIFICACIÓN TEST 02 — MapBiomas (raster de cobertura y uso de suelo)
+## =============================================================================
+##
+## QUÉ HACE ESTE SCRIPT
+## -----------------------------------------------------------------------------
+## Toma uno o más rasters de cobertura y uso de suelo (por ejemplo, la serie
+## anual de MapBiomas: 2000, 2004, 2008... hasta el año más reciente) y los
+## reclasifica en un esquema simplificado de 3 clases, llamado "TEST 02":
+##
+##     0 = Sin datos / ND   (nubes, sombras, cuerpos de agua, hielo/nieve,
+##                            o cualquier código no contemplado)
+##     1 = Natural           (bosque, humedal, estepa, matorral, etc.)
+##     2 = Antrópico          (agricultura, silvicultura, infraestructura,
+##                            pastura, pastizal/pradera, etc.)
+##
+## Este esquema reducido sirve para analizar cambios de uso de suelo (por
+## ejemplo, dentro y alrededor de áreas protegidas) sin necesitar las ~20-30
+## clases originales de MapBiomas, que para ese tipo de análisis son más
+## detalladas de lo necesario.
+##
+## DIFERENCIA CON TEST 1: el código 12 (Pastizal/Grassland) se clasifica
+## como Antrópico (2) en TEST 02, mientras que en TEST 1 es Natural (1). Es
+## una decisión metodológica propia de este esquema, no un error — ver
+## Metodologia_Reclasificacion_TEST02.docx para el detalle.
+##
+## CÓMO USARLO
+## -----------------------------------------------------------------------------
+## 1. Instala el paquete 'terra' si no lo tienes: install.packages("terra")
+## 2. Edita la sección "0. CONFIGURACIÓN" más abajo:
+##      - INPUT_DIR / OUTPUT_DIR: carpetas de entrada y salida
+##      - INPUT_PATTERN: cómo se llaman tus archivos de entrada
+##      - YEARS: qué años/rasters vas a procesar
+##      - La matriz de reclasificación (sección 2), si tu propia leyenda de
+##        clases usa códigos distintos a los de MapBiomas
+## 3. Corre el script completo (Ctrl+A, luego Ctrl+Enter en RStudio, o
+##    `Rscript reclasificar_test02.R` desde la terminal).
+##
+## REQUISITOS
+## -----------------------------------------------------------------------------
+## - R >= 4.0
+## - Paquete 'terra' (funciona con rasters grandes sin cargarlos completos
+##   a memoria; no requiere ArcGIS ni licencias comerciales)
+##
+## =============================================================================
 
-PROYECTO FONDECYT Nº 1251080
-"Evaluación de las áreas protegidas y sus zonas de amortiguación en Chile: 
-un análisis geoespacial de su eficacia para contrarrestar el cambio global"
 
-AUTOR DEL CÓDIGO: Valentina Contreras
+## =============================================================================
+## 0. CONFIGURACIÓN — EDITA ESTA SECCIÓN SEGÚN TU CASO
+## =============================================================================
+
+# --- Carpetas de entrada y salida --------------------------------------------
+# Reemplaza estas rutas por las de tu propio computador/proyecto.
+# En Windows, usa "/" en vez de "\" (ej. "C:/Usuarios/Nombre/Datos"),
+# o antepone "r" al string: r"(C:\Usuarios\Nombre\Datos)"
+
+INPUT_DIR  <- "ruta/a/tus/rasters_originales"     # carpeta con los rasters SIN reclasificar
+OUTPUT_DIR <- "ruta/a/tus/rasters_test02"         # carpeta donde se guardará el resultado
+
+# --- Años o identificadores a procesar ---------------------------------------
+# Puede ser una serie de años (como en este ejemplo) o cualquier otro
+# identificador que uses para nombrar tus archivos (ej. nombres de región).
+
+YEARS <- c(2000, 2004, 2008, 2012, 2016, 2020, 2024)
+
+# --- Patrón de nombre de archivo ----------------------------------------------
+# Función que arma el nombre del archivo de ENTRADA a partir del año/ID.
+# Ajusta el sprintf() a como se llamen tus archivos.
+# Ejemplo: si tus archivos son "cobertura_2000.tif", usa:
+#   sprintf("cobertura_%d.tif", anio)
+
+nombre_archivo_entrada <- function(anio) {
+  sprintf("%d_lclu_reclass.tif", anio)
+}
+
+# Función que arma el nombre del archivo de SALIDA (reclasificado TEST 02).
+nombre_archivo_salida <- function(anio) {
+  sprintf("%d_test_02.tif", anio)
+}
 
 
-================================================================================
-DESCRIPCIÓN GENERAL
-================================================================================
+## =============================================================================
+## 1. CARGA DE PAQUETES
+## =============================================================================
 
-Este script realiza la reclasificación de rasters de cobertura del suelo 
-MapBiomas (años 2000, 2004, 2008, 2012, 2016, 2020, 2024) en tres categorías:
+if (!requireNamespace("terra", quietly = TRUE)) {
+  stop(
+    "El paquete 'terra' no está instalado. ",
+    "Instálalo con: install.packages(\"terra\")"
+  )
+}
+library(terra)
 
-  • 1 = NATURAL: Ecosistemas sin intervención humana directa (RESTRICTIVO)
-  • 0 = ANTRÓPICO: Cualquier forma de modificación o uso humano
-  • ND = NO DATA: Píxeles sin información válida
 
-ENFOQUE TEST 2:
-  - Ante la duda, clasifica como ANTRÓPICO
-  - Ejemplos: Praderas → ANTRÓPICO (pueden estar pastoreadas)
-  - Objetivo: Maximizar precisión en detección de naturalidad pura
-  - Propósito: Escenario pesimista / identificar núcleos de protección real
+## =============================================================================
+## 2. MATRIZ DE RECLASIFICACIÓN — TEST 02
+## =============================================================================
+## Aquí se define qué código original (de tu raster de entrada) corresponde
+## a cada una de las 3 clases de salida. Los códigos de ejemplo a continuación
+## corresponden a MapBiomas Chile, Colección 2 — AJÚSTALOS si tu leyenda de
+## clases es distinta (otra colección de MapBiomas, otro país, u otra fuente
+## de datos de cobertura de suelo).
+##
+## Para encontrar los códigos de tu propio raster, puedes:
+##   a) Revisar la leyenda/documentación oficial de tu fuente de datos, o
+##   b) Correr `freq(rast("tu_archivo.tif"))` en R para listar todos los
+##      códigos que efectivamente aparecen en tus datos, y decidir a qué
+##      clase (Natural / Antrópico / Sin datos) corresponde cada uno.
 
-DIFERENCIA CLAVE respecto a TEST 1:
-  - Código 12 (Pradera): NATURAL en TEST 1, ANTRÓPICO en TEST 2
-  - Justificación: El pastoreo es intervención humana que altera ecosistema
-  - Resultado: TEST 2 genera menor % natural que TEST 1
+# Códigos que se consideran "Sin datos / ND" (0):
+#   - Cuerpos de agua, hielo/nieve, nubes, sombras, o clases sin observación
+CODIGOS_SIN_DATOS <- c(33, 34, 79, 80)
 
-================================================================================
-FLUJO DE TRABAJO
-================================================================================
+# Códigos que se consideran "Natural" (1):
+#   - Bosque, humedal, estepa, matorral, afloramiento rocoso, etc.
+CODIGOS_NATURAL <- c(3, 11, 23, 25, 29, 61, 63, 66)
 
-1. CONFIGURACIÓN
-   - Definir rutas de rasters de entrada
-   - Definir rutas de salida
-   - Definir matriz de reclasificación TEST 2 (DIFERENTE a TEST 1)
-   - Configurar workspace y ambiente ArcGIS
+# Códigos que se consideran "Antrópico" (2):
+#   - Agricultura, silvicultura/plantaciones, infraestructura, pastura, y
+#     pastizal/pradera (código 12 — a diferencia de TEST 1, donde ese mismo
+#     código se clasifica como Natural).
+CODIGOS_ANTROPICO <- c(9, 12, 15, 18, 24)
 
-2. PROCESAMIENTO POR AÑO
-   - Para cada raster (2000, 2004, 2008, 2012, 2016, 2020, 2024):
-     * Cargar raster original
-     * Aplicar reglas de reclasificación TEST 2 (restrictivas)
-     * Exportar raster reclasificado
-     * Calcular estadísticas (% natural, % antrópico, % nodata)
-     * Registrar métricas en log
+# Construcción de la tabla de reglas para terra::classify().
+# Formato esperado: una matriz de 2 columnas, "is" (código original) y
+# "becomes" (código de salida).
+tabla_reclasificacion <- rbind(
+  cbind(is = CODIGOS_SIN_DATOS,  becomes = 0),
+  cbind(is = CODIGOS_NATURAL,    becomes = 1),
+  cbind(is = CODIGOS_ANTROPICO,  becomes = 2)
+)
 
-3. VALIDACIÓN
-   - Verificar que todos los píxeles fueron reclasificados
-   - Validar que TEST 2 ≤ TEST 1 (no puede tener más natural)
-   - Validar rango de valores (0, 1, ND solamente)
-   - Calcular diferencias entre TEST 1 y TEST 2
 
-4. REPORTE FINAL
-   - Generar tabla resumen de todas las reclasificaciones
-   - Mostrar estadísticas por año
-   - Calcular DIFERENCIA y ZONA DE INCERTIDUMBRE
-   - Indicar ubicación de archivos de salida
+## =============================================================================
+## 3. FUNCIÓN PRINCIPAL: RECLASIFICAR UN RASTER
+## =============================================================================
 
-================================================================================
-REQUISITOS TÉCNICOS
-================================================================================
+#' Reclasifica un raster de cobertura de suelo al esquema de 3 clases (TEST 02)
+#'
+#' @param ruta_entrada  Ruta al raster original (.tif) a reclasificar.
+#' @param ruta_salida   Ruta donde se guardará el raster reclasificado.
+#' @param tabla_reglas  Matriz de 2 columnas (is, becomes) con las reglas de
+#'                       reclasificación. Por defecto usa `tabla_reclasificacion`
+#'                       definida en la sección 2.
+#'
+#' @return El objeto SpatRaster reclasificado (además de escribirlo a disco).
+reclasificar_raster <- function(ruta_entrada, ruta_salida, tabla_reglas = tabla_reclasificacion) {
 
-• Python 3.6+ (ArcGIS Pro o ArcGIS Desktop)
-• ArcGIS con extensión Spatial Analyst
-• Módulos: arcpy, numpy, os, csv, datetime
-• Acceso a licencia de ArcGIS válida
-• Rasters de entrada en formato GeoTIFF
-• Espacio en disco para rasters de salida (~5-10 GB total)
+  if (!file.exists(ruta_entrada)) {
+    stop("No se encontró el archivo de entrada:\n  ", ruta_entrada)
+  }
 
-NOTA IMPORTANTE:
-  Se recomienda ejecutar TEST 1 ANTES de TEST 2 para comparación válida.
-  Se pueden ejecutar en paralelo en máquinas diferentes, pero deben usar
-  el MISMO raster de entrada para que la comparación sea válida.
+  # Cargar el raster. rast() solo lee metadatos (dimensiones, CRS, etc.),
+  # no carga los valores de los píxeles a memoria todavía — por eso este
+  # script funciona incluso con rasters muy grandes (ej. un país completo).
+  r <- rast(ruta_entrada)
 
-================================================================================
-MATRIZ DE RECLASIFICACIÓN - TEST 2 
-================================================================================
+  # Algunos rasters de cobertura de suelo son "categóricos": el valor que
+  # ves en un SIG (ej. "Bosque") en realidad se almacena como un código
+  # numérico interno, con una tabla aparte que traduce código -> etiqueta.
+  # Otros rasters son "numéricos directos": el valor de celda YA ES el
+  # código de clase, sin tabla de traducción.
+  # Este bloque detecta cuál de los dos casos aplica, y si es categórico,
+  # deja los valores de celda como su código numérico puro antes de
+  # reclasificar (para que la tabla de reglas de la sección 2 funcione
+  # igual en ambos casos).
+  tabla_categorias <- tryCatch(cats(r)[[1]], error = function(e) NULL)
+  es_categorico <- !is.null(tabla_categorias) && nrow(tabla_categorias) > 0
 
-Código MapBiomas → Clase Original → Clasificación TEST 2
+  if (es_categorico) {
+    message("  Formato detectado: CATEGÓRICO (con etiquetas de texto). Extrayendo código numérico...")
+    levels(r) <- NULL  # deja el valor de celda como código numérico puro
+  } else {
+    message("  Formato detectado: NUMÉRICO DIRECTO (el valor de celda ya es el código de clase).")
+  }
 
-NATURAL (valor = 1):
-  3  → Bosque
-  4  → Bosque secundario
-  5  → Formación forestal
-  11 → Humedal
-  23 → Arena
-  25 → Áreas sin vegetación (natural)
-  29 → Afloramiento rocoso
-  59 → Bosque primario
-  60 → Bosque secundario
-  61 → Salar
-  63 → Estepa
-  66 → Matorral
-  67 → Bosque achaparrado
+  # Reclasificación propiamente dicha.
+  # - `tabla_reglas` indica qué código original se convierte en qué clase.
+  # - `others = 0` asigna "Sin datos/ND" a CUALQUIER valor que no esté
+  #   explícitamente en la tabla de reglas (incluye píxeles NA/vacíos del
+  #   raster original). Esto evita que códigos no contemplados queden con
+  #   un valor indefinido en la salida.
+  # - `datatype = "INT1U"` guarda el resultado como enteros de 1 byte sin
+  #   signo (0 a 255), que es más que suficiente para 3 clases (0, 1, 2) y
+  #   ocupa mucho menos espacio en disco que el formato original.
+  r_reclasificado <- classify(r, tabla_reglas, others = 0, datatype = "INT1U")
 
-ANTRÓPICO (valor = 0):
-  9  → Plantación
-  12 → Pradera [TEST 2: ANTRÓPICO - RESTRICTIVO - DIFERENCIA CON TEST 1]
-  15 → Pastoreo
-  18 → Agricultura
-  24 → Infraestructura
+  # Crear la carpeta de salida si no existe todavía.
+  dir.create(dirname(ruta_salida), recursive = TRUE, showWarnings = FALSE)
 
-NO DATA (valor = ND = 255 o -9999):
-  33, 34, 79, 80 → Valores sin clasificación
-  NULL → Píxeles originalmente sin datos
+  writeRaster(r_reclasificado, ruta_salida, overwrite = TRUE, datatype = "INT1U")
 
-DIFERENCIA CLAVE:
-  Código 12 (Pradera):
-    - TEST 1: 1 (NATURAL) ← Conservador
-    - TEST 2: 0 (ANTRÓPICO) ← Restrictivo
-    
-  Justificación:
-    Las praderas suelen estar pastoreadas, alterando su composición
-    y estructura. TEST 2 las clasifica como antrópico para ser más
-    restrictivo en la definición de "naturalidad pura".
+  invisible(r_reclasificado)
+}
 
-================================================================================
-CONFIGURACIÓN DE ENTRADA
-================================================================================
 
-Verifica los siguientes parámetros antes de ejecutar:
+## =============================================================================
+## 4. EJECUCIÓN: RECLASIFICAR TODOS LOS AÑOS/ARCHIVOS CONFIGURADOS
+## =============================================================================
 
-  • ruta_base_entrada: Ruta raíz donde están los rasters originales
-  • ruta_salida: Ruta donde se guardarán los rasters reclasificados
-  • anos_procesados: Lista de años a procesar
-  • nodata_value: Valor que representa "sin datos" (ej: 255 o -9999)
-  • workspace_arcgis: Ruta de trabajo de ArcGIS
+n_total <- length(YEARS)
 
-Archivos de entrada esperados:
-  - Landcover_2000_clip.tif
-  - Landcover_2004_clip.tif
-  - Landcover_2008_clip.tif
-  - Landcover_2012_clip.tif
-  - Landcover_2016_clip.tif
-  - Landcover_2020_clip.tif
-  - Landcover_2024_clip.tif
+for (i in seq_along(YEARS)) {
 
-================================================================================
-"""
+  anio <- YEARS[i]
 
-import arcpy
-from arcpy.sa import *
-import numpy as np
-import os
-import csv
-from datetime import datetime
+  ruta_entrada <- file.path(INPUT_DIR, nombre_archivo_entrada(anio))
+  ruta_salida  <- file.path(OUTPUT_DIR, nombre_archivo_salida(anio))
 
-# ================================================================================
-# CONFIGURACIÓN
-# ================================================================================
+  cat(sprintf("\n[%d/%d] Procesando: %s\n", i, n_total, anio))
+  cat(sprintf("  Entrada: %s\n", ruta_entrada))
+  cat(sprintf("  Salida:  %s\n", ruta_salida))
 
-# Rutas de entrada/salida
-RUTA_BASE_ENTRADA = r"C:\tu_ruta_data\MapBiomas_Original"
-RUTA_SALIDA = r"C:\tu_ruta_output\MapBiomas_Reclasificado_Test2"
-RUTA_LOG = r"C:\tu_ruta_output\logs"
+  tryCatch({
+    reclasificar_raster(ruta_entrada, ruta_salida)
+    cat("  Listo.\n")
+  }, error = function(e) {
+    cat("  ERROR al procesar este archivo:\n  ", conditionMessage(e), "\n")
+    cat("  (el script continúa con el siguiente archivo)\n")
+  })
+}
 
-# Años a procesar
-ANOS_PROCESADOS = [2000, 2004, 2008, 2012, 2016, 2020, 2024]
-
-# Valor que representa "sin datos" en el raster original
-NODATA_VALUE = 255  # O -9999, depende de tu raster
-
-# Valor de salida para "sin datos" en el raster reclasificado
-NODATA_SALIDA = 255
-
-# Workspace
-WORKSPACE = r"C:\tu_ruta_temp"
-arcpy.env.workspace = WORKSPACE
-arcpy.env.overwriteOutput = True
-
-# Extensión Spatial Analyst requerida
-arcpy.CheckOutExtension("Spatial")
-
-# ================================================================================
-# FUNCIÓN: CREAR DIRECTORIO SI NO EXISTE
-# ================================================================================
-
-def crear_directorio(ruta):
-    """Crea directorio si no existe"""
-    if not os.path.exists(ruta):
-        os.makedirs(ruta)
-        print(f"✓ Directorio creado: {ruta}")
-    else:
-        print(f"✓ Directorio existe: {ruta}")
-
-# ================================================================================
-# FUNCIÓN: MATRIZ DE RECLASIFICACIÓN TEST 2 (RESTRICTIVO)
-# ================================================================================
-
-def crear_tabla_reclasificacion_test2():
-    """
-    Crea la tabla de reclasificación para TEST 2 (Restrictivo)
-    
-    DIFERENCIA CLAVE CON TEST 1:
-    - Código 12 (Pradera): NATURAL en TEST 1 → ANTRÓPICO en TEST 2
-    
-    Retorna diccionario: {código_original: valor_nuevo}
-    """
-    matriz = {
-        # NATURAL (1) - Solo ecosistemas sin intervención directa
-        3: 1,    # Bosque
-        4: 1,    # Bosque secundario
-        5: 1,    # Formación forestal
-        11: 1,   # Humedal
-        23: 1,   # Arena
-        25: 1,   # Áreas sin vegetación (natural)
-        29: 1,   # Afloramiento rocoso
-        59: 1,   # Bosque primario
-        60: 1,   # Bosque secundario
-        61: 1,   # Salar
-        63: 1,   # Estepa
-        66: 1,   # Matorral
-        67: 1,   # Bosque achaparrado
-        
-        # ANTRÓPICO (0) - Incluye praderas pastoreadas
-        9: 0,    # Plantación
-        12: 0,   # Pradera [TEST 2 RESTRICTIVO: ANTRÓPICO - DIFERENCIA CON TEST 1]
-        15: 0,   # Pastoreo
-        18: 0,   # Agricultura
-        24: 0,   # Infraestructura
-        
-        # NO DATA (ND)
-        33: NODATA_SALIDA,   # Sin clasificación
-        34: NODATA_SALIDA,   # Sin clasificación
-        79: NODATA_SALIDA,   # Sin clasificación
-        80: NODATA_SALIDA,   # Sin clasificación
-    }
-    
-    return matriz
-
-# ================================================================================
-# FUNCIÓN: RECLASIFICAR RASTER CON NUMPY
-# ================================================================================
-
-def reclasificar_raster_numpy(raster_entrada, raster_salida, matriz_reclasificacion):
-    """
-    Reclasifica un raster usando numpy para mayor flexibilidad
-    
-    Parámetros:
-        raster_entrada: Ruta del raster original
-        raster_salida: Ruta de salida del raster reclasificado
-        matriz_reclasificacion: Diccionario {original: nuevo}
-    
-    Retorna:
-        Diccionario con estadísticas del procesamiento
-    """
-    
-    try:
-        print(f"\n  Procesando: {os.path.basename(raster_entrada)}")
-        
-        # Cargar raster como array
-        raster_obj = arcpy.Raster(raster_entrada)
-        
-        # Información del raster
-        filas = raster_obj.height
-        columnas = raster_obj.width
-        espacial_ref = raster_obj.spatialReference
-        extension = raster_obj.extent
-        tamanio_pixel = raster_obj.meanCellWidth
-        
-        print(f"    Dimensiones: {filas} x {columnas}")
-        print(f"    Tamaño píxel: {tamanio_pixel}m")
-        
-        # Convertir a array numpy
-        array_original = arcpy.RasterToNumPyArray(raster_entrada)
-        print(f"    Array creado: {array_original.shape}")
-        
-        # Crear array de salida
-        array_salida = np.full_like(array_original, NODATA_SALIDA, dtype=np.int16)
-        
-        # Aplicar reclasificación TEST 2
-        print(f"    Aplicando reclasificación TEST 2 (Restrictivo)...")
-        contador_reclasificados = 0
-        
-        for codigo_original, valor_nuevo in matriz_reclasificacion.items():
-            mascara = (array_original == codigo_original)
-            array_salida[mascara] = valor_nuevo
-            contador_reclasificados += np.sum(mascara)
-        
-        # Contar píxeles sin datos originales
-        mascara_nodata_original = (array_original == NODATA_VALUE)
-        array_salida[mascara_nodata_original] = NODATA_SALIDA
-        contador_nodata_original = np.sum(mascara_nodata_original)
-        
-        # Estadísticas
-        total_pixeles = filas * columnas
-        pixeles_natural = np.sum(array_salida == 1)
-        pixeles_antropico = np.sum(array_salida == 0)
-        pixeles_nodata = np.sum(array_salida == NODATA_SALIDA)
-        
-        pct_natural = (pixeles_natural / total_pixeles) * 100 if total_pixeles > 0 else 0
-        pct_antropico = (pixeles_antropico / total_pixeles) * 100 if total_pixeles > 0 else 0
-        pct_nodata = (pixeles_nodata / total_pixeles) * 100 if total_pixeles > 0 else 0
-        
-        print(f"    Píxeles reclasificados: {contador_reclasificados:,}")
-        print(f"    Píxeles sin datos originales: {contador_nodata_original:,}")
-        print(f"    Total píxeles: {total_pixeles:,}")
-        
-        # Guardar raster de salida
-        print(f"    Guardando raster: {os.path.basename(raster_salida)}")
-        
-        # Crear raster desde array numpy
-        raster_salida_obj = arcpy.NumPyArrayToRaster(
-            array_salida,
-            extension.lowerLeft,
-            tamanio_pixel,
-            tamanio_pixel,
-            value_type="FLOAT"
-        )
-        
-        # Asignar proyección
-        raster_salida_obj = arcpy.management.DefineProjection_management(
-            raster_salida_obj, espacial_ref
-        )
-        
-        # Guardar con compresión
-        arcpy.management.CopyRaster_management(
-            raster_salida_obj,
-            raster_salida,
-            format="TIFF",
-            config_keyword="LZ77"
-        )
-        
-        print(f"    ✓ Raster guardado: {raster_salida}")
-        
-        # Retornar estadísticas
-        estadisticas = {
-            "archivo": os.path.basename(raster_entrada),
-            "total_pixeles": total_pixeles,
-            "pixeles_natural": pixeles_natural,
-            "pixeles_antropico": pixeles_antropico,
-            "pixeles_nodata": pixeles_nodata,
-            "pct_natural": round(pct_natural, 2),
-            "pct_antropico": round(pct_antropico, 2),
-            "pct_nodata": round(pct_nodata, 2),
-            "suma_pct": round(pct_natural + pct_antropico + pct_nodata, 2),
-            "estado": "EXITOSO"
-        }
-        
-        return estadisticas
-        
-    except Exception as e:
-        print(f"    ✗ ERROR: {str(e)}")
-        return {
-            "archivo": os.path.basename(raster_entrada),
-            "estado": "ERROR",
-            "error": str(e)
-        }
-
-# ================================================================================
-# FUNCIÓN: PROCESAR TODOS LOS AÑOS
-# ================================================================================
-
-def procesar_todos_anos(anos, matriz_reclasificacion):
-    """
-    Procesa todos los años especificados
-    """
-    
-    print("\n" + "="*80)
-    print("INICIANDO RECLASIFICACIÓN TEST 2 (RESTRICTIVO)")
-    print("="*80)
-    print("\nNOTA: TEST 2 es más RESTRICTIVO que TEST 1")
-    print("  Código 12 (Pradera): Clasificado como ANTRÓPICO en TEST 2")
-    print("  Resultado: % natural en TEST 2 ≤ % natural en TEST 1")
-    print("="*80)
-    
-    resultados_todos = []
-    
-    for ano in anos:
-        
-        # Construir rutas
-        nombre_archivo = f"Landcover_{ano}_clip.tif"
-        raster_entrada = os.path.join(RUTA_BASE_ENTRADA, nombre_archivo)
-        
-        nombre_salida = f"Landcover_{ano}_Reclasificado_Test2.tif"
-        raster_salida = os.path.join(RUTA_SALIDA, nombre_salida)
-        
-        # Verificar que archivo de entrada existe
-        if not os.path.exists(raster_entrada):
-            print(f"\n✗ NO ENCONTRADO: {raster_entrada}")
-            resultados_todos.append({
-                "ano": ano,
-                "estado": "ARCHIVO_NO_ENCONTRADO",
-                "ruta": raster_entrada
-            })
-            continue
-        
-        print(f"\n{'─'*80}")
-        print(f"AÑO: {ano}")
-        print(f"{'─'*80}")
-        
-        # Procesar
-        resultado = reclasificar_raster_numpy(
-            raster_entrada,
-            raster_salida,
-            matriz_reclasificacion
-        )
-        
-        resultados_todos.append(resultado)
-    
-    return resultados_todos
-
-# ================================================================================
-# FUNCIÓN: GENERAR REPORTE COMPLETO
-# ================================================================================
-
-def generar_reporte(resultados, ruta_salida_reporte):
-    """
-    Genera reporte CSV con resultados de todos los años
-    Incluye información sobre comparación TEST 2 vs TEST 1
-    """
-    
-    print(f"\n\n{'='*80}")
-    print("GENERANDO REPORTE FINAL TEST 2")
-    print('='*80)
-    
-    # Crear nombre de archivo
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    nombre_reporte = f"Reporte_Reclasificacion_Test2_{timestamp}.csv"
-    ruta_completa = os.path.join(ruta_salida_reporte, nombre_reporte)
-    
-    # Escribir CSV
-    with open(ruta_completa, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=[
-            'Ano', 'Archivo', 'Total_Pixeles', 'Pixeles_Natural', 
-            'Pixeles_Antropico', 'Pixeles_NoData', 'Pct_Natural', 
-            'Pct_Antropico', 'Pct_NoData', 'Suma_Pct', 'Estado'
-        ])
-        
-        writer.writeheader()
-        
-        for i, resultado in enumerate(resultados):
-            ano = ANOS_PROCESADOS[i] if i < len(ANOS_PROCESADOS) else "N/A"
-            
-            fila = {
-                'Ano': ano,
-                'Archivo': resultado.get('archivo', 'N/A'),
-                'Total_Pixeles': resultado.get('total_pixeles', 'N/A'),
-                'Pixeles_Natural': resultado.get('pixeles_natural', 'N/A'),
-                'Pixeles_Antropico': resultado.get('pixeles_antropico', 'N/A'),
-                'Pixeles_NoData': resultado.get('pixeles_nodata', 'N/A'),
-                'Pct_Natural': resultado.get('pct_natural', 'N/A'),
-                'Pct_Antropico': resultado.get('pct_antropico', 'N/A'),
-                'Pct_NoData': resultado.get('pct_nodata', 'N/A'),
-                'Suma_Pct': resultado.get('suma_pct', 'N/A'),
-                'Estado': resultado.get('estado', 'N/A')
-            }
-            
-            writer.writerow(fila)
-    
-    print(f"✓ Reporte guardado: {ruta_completa}")
-    
-    # Mostrar resumen
-    print(f"\n{'─'*80}")
-    print("RESUMEN DE RECLASIFICACIÓN TEST 2 (RESTRICTIVO)")
-    print(f"{'─'*80}")
-    
-    for resultado in resultados:
-        if resultado.get('estado') == 'EXITOSO':
-            print(f"\n{resultado.get('archivo')}:")
-            print(f"  Natural:    {resultado.get('pct_natural'):>6.2f}% ({resultado.get('pixeles_natural'):>12,} píxeles)")
-            print(f"  Antrópico:  {resultado.get('pct_antropico'):>6.2f}% ({resultado.get('pixeles_antropico'):>12,} píxeles)")
-            print(f"  Sin Datos:  {resultado.get('pct_nodata'):>6.2f}% ({resultado.get('pixeles_nodata'):>12,} píxeles)")
-            print(f"  SUMA:       {resultado.get('suma_pct'):>6.2f}%")
-            print(f"\n  ℹ  NOTA: TEST 2 es restrictivo. Compare con TEST 1 para:")
-            print(f"      - Identificar zona de incertidumbre (píxeles de pradera)")
-            print(f"      - Evaluar robustez de conclusiones")
-            print(f"      - Establecer rango natural: TEST2 ≤ Test ≤ TEST1")
-
-# ================================================================================
-# FUNCIÓN PRINCIPAL
-# ================================================================================
-
-def main():
-    """
-    Función principal - orquesta todo el proceso
-    """
-    
-    try:
-        print("\n" + "="*80)
-        print("SCRIPT DE RECLASIFICACIÓN DE RASTERS MAPBIOMAS - TEST 2")
-        print("PROYECTO FONDECYT Nº 1251080")
-        print("ENFOQUE RESTRICTIVO (Maximiza detección de naturalidad pura)")
-        print("="*80)
-        
-        # Crear directorios
-        print("\n[1/4] Creando directorios...")
-        crear_directorio(RUTA_SALIDA)
-        crear_directorio(RUTA_LOG)
-        
-        # Crear matriz de reclasificación
-        print("\n[2/4] Preparando matriz de reclasificación TEST 2...")
-        matriz = crear_tabla_reclasificacion_test2()
-        print(f"✓ Matriz creada con {len(matriz)} reglas de conversión")
-        print(f"  DIFERENCIA CLAVE: Código 12 (Pradera) → ANTRÓPICO")
-        
-        # Procesar rasters
-        print("\n[3/4] Reclasificando rasters...")
-        resultados = procesar_todos_anos(ANOS_PROCESADOS, matriz)
-        
-        # Generar reporte
-        print("\n[4/4] Generando reportes...")
-        generar_reporte(resultados, RUTA_LOG)
-        
-        print("\n" + "="*80)
-        print("✓ PROCESO COMPLETADO EXITOSAMENTE")
-        print("="*80)
-        print(f"\nRasters de salida: {RUTA_SALIDA}")
-        print(f"Reportes: {RUTA_LOG}")
-        print(f"\nRECOMENDACION:")
-        print(f"  Ejecute TEST 1 también para comparación y análisis de incertidumbre")
-        print(f"  Diferencia entre TEST 1 y TEST 2 = Píxeles de pradera = Zona ambigua")
-        
-    except Exception as e:
-        print(f"\n✗ ERROR EN EJECUCIÓN: {str(e)}")
-        
-    finally:
-        # Liberar extensión
-        arcpy.CheckInExtension("Spatial")
-
-# ================================================================================
-# EJECUTAR
-# ================================================================================
-
-if __name__ == "__main__":
-    main()
+cat("\n=====================================================================\n")
+cat(sprintf("Reclasificación TEST 02 completada para %d archivo(s).\n", n_total))
+cat("Revisa la carpeta de salida (OUTPUT_DIR) para ver los resultados.\n")
+cat("=====================================================================\n")
