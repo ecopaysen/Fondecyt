@@ -107,7 +107,7 @@ CODIGOS_SIN_DATOS <- c(33, 34, 79, 80)
 
 # Códigos que se consideran "Natural" (1):
 #   - Bosque, humedal, pastizal natural, matorral, afloramiento rocoso, etc.
-CODIGOS_NATURAL <- c(3, 11, 12, 23, 25, 29, 59, 60, 61, 63, 66, 67)
+CODIGOS_NATURAL <- c(3, 11, 12, 23, 25, 29, 61, 63, 66)
 
 # Códigos que se consideran "Antrópico" (2):
 #   - Agricultura, silvicultura/plantaciones, infraestructura, pastura, etc.
