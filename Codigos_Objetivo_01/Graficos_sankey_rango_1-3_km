@@ -1,0 +1,309 @@
+# ==============================================================================
+# GRAFICOS SANKEY - RANGO 1-3 KM (SOLO GRAFICOS, RAPIDO)
+# Objetivo 1 - FONDECYT Nº 1251080
+# ==============================================================================
+#
+# QUE HACE ESTE SCRIPT:
+#   Lee el cache interno (.rds) que genero el script de matrices
+#   correspondiente a este mismo rango, y con eso arma y exporta los
+#   diagramas de Sankey: HTML interactivo + PNG + TIFF (300dpi), para
+#   las 4 agrupaciones (Total Nacional, Parque, Reserva, Monumento) y
+#   los 2 tipos de grafico (serie temporal y comparacion de extremos).
+#
+#   IMPORTANTE: este script NO vuelve a tocar el raster ni el shapefile.
+#   Por eso es rapido (segundos, no minutos) y es el que hay que correr
+#   cada vez que se necesite ajustar algo puramente visual (color,
+#   tamaño, tipografia) sin tener que repetir la extraccion completa.
+#
+# REQUISITO PREVIO:
+#   Tiene que existir el cache (.rds) generado por el script de matrices
+#   de este mismo rango (carpeta Cache_Interno_NoTocar/). Si no existe,
+#   el script va a avisar en la consola "no hay cache" y no va a generar
+#   nada para esa categoria - hay que correr primero el script de
+#   matrices correspondiente.
+#
+# COMO USARLO (para reemplazar por tus propios datos):
+#   - Cambia UNICAMENTE la ruta marcada con ">>> REEMPLAZAR <<<" en el
+#     Bloque 01 (debe apuntar a la misma carpeta base que se uso en el
+#     script de matrices de este rango).
+#   - Si se necesita ajustar el color o la transparencia de las
+#     trayectorias, el unico valor a tocar es "alpha_link" en el Bloque
+#     02 (escala 0 a 1: 0 = invisible, 1 = solido; valor aprobado
+#     actualmente: 0.45).
+#   - Corre el script completo. Deberia tardar solo unos segundos por
+#     grafico (en total, pocos minutos para los 8 graficos de este
+#     rango: 4 categorias x 2 tipos).
+#
+# REQUISITOS (paquetes de R):
+#   install.packages(c("data.table", "plotly", "htmlwidgets", "webshot2", "magick"))
+#   webshot2::install_phantomjs()  # si nunca se uso webshot2 antes
+#
+# ==============================================================================
+
+library(data.table)
+library(plotly)
+library(htmlwidgets)
+library(magick)
+library(webshot2)
+
+# ------------------------------------------------------------------------------
+# 01. RUTAS
+# ------------------------------------------------------------------------------
+
+dir_base     <- "C:/Users/valen/Desktop/02_Objetivo_1/Sankey"   # >>> REEMPLAZAR <<< misma carpeta base usada en el script de matrices
+dir_rango    <- file.path(dir_base, "1-3km")
+dir_cache    <- file.path(dir_rango, "Cache_Interno_NoTocar")
+dir_graficos <- file.path(dir_rango, "Graficos_Sankey")
+
+etiquetas <- c("Total_Nacional", "Parque_Nacional", "Reserva_Nacional", "Monumento_Natural")
+
+traducir_etiqueta_ingles <- function(etiqueta) {
+  switch(etiqueta,
+         "Total_Nacional"     = "All_Protected_Areas",
+         "Parque_Nacional"    = "National_Parks",
+         "Reserva_Nacional"   = "National_Reserves",
+         "Monumento_Natural"  = "Natural_Monuments",
+         etiqueta
+  )
+}
+
+
+# ------------------------------------------------------------------------------
+# 02. COLORES (mismos parametros aprobados)
+# ------------------------------------------------------------------------------
+
+color_natural   <- "#3A8F41"
+color_antropico <- "#C2703D"
+alpha_link <- 0.45   # >>> REEMPLAZAR <<< AJUSTABLE: intensidad de trayectorias (0=invisible, 1=solido)
+color_link_natural   <- sprintf("rgba(58,143,65,%s)", alpha_link)
+color_link_antropico <- sprintf("rgba(194,112,61,%s)", alpha_link)
+
+
+# ------------------------------------------------------------------------------
+# 03. FUNCIONES (identicas a las del script de matrices)
+# ------------------------------------------------------------------------------
+
+calcular_dimensiones_render <- function(ancho_cm, alto_cm, dpi = 300) {
+  alto_px_final  <- round(alto_cm  / 2.54 * dpi)
+  ancho_px_final <- round(ancho_cm / 2.54 * dpi)
+  list(ancho_px_logico = ancho_px_final, alto_px_logico = alto_px_final, zoom = 1)
+}
+
+construir_figura_sankey <- function(matriz_larga, anios_grafico, ancho_px, alto_px) {
+
+  escala <- alto_px / 500
+
+  matriz_larga <- copy(as.data.table(matriz_larga))
+  matriz_larga <- matriz_larga[clase_ini != "NoData" & clase_fin != "NoData"]
+  if (nrow(matriz_larga) == 0) return(NULL)
+
+  anio_min <- min(matriz_larga$anio_ini)
+  comp_primer_anio <- matriz_larga[anio_ini == anio_min, .(area = sum(area_ha)), by = .(anio = anio_ini, clase = clase_ini)]
+  comp_resto <- matriz_larga[, .(area = sum(area_ha)), by = .(anio = anio_fin, clase = clase_fin)]
+  composicion <- rbind(comp_primer_anio, comp_resto)
+  composicion[, pct := area / sum(area) * 100, by = anio]
+
+  nombres_nodo_id <- character(0); nombres_nodo_label <- character(0)
+  x_nodo <- numeric(0); color_nodo <- character(0); hover_nodo <- character(0)
+
+  for (i in seq_along(anios_grafico)) {
+    a <- anios_grafico[i]
+    x_pos <- if (length(anios_grafico) > 1) 0.02 + (i - 1) * (0.96 / (length(anios_grafico) - 1)) else 0.5
+    for (clase_interna in c("Natural", "Antropico")) {
+      id_nodo <- paste0(clase_interna, "_", a)
+      nombres_nodo_id <- c(nombres_nodo_id, id_nodo)
+      fila_comp <- composicion[anio == a & clase == clase_interna]
+      pct_valor <- if (nrow(fila_comp) > 0) round(fila_comp$pct, 1) else NA_real_
+      nombre_clase_visible <- ifelse(clase_interna == "Natural", "Natural", "Anthropic")
+      label_visible <- if (!is.na(pct_valor)) paste0(pct_valor, "%") else ""
+      nombres_nodo_label <- c(nombres_nodo_label, label_visible)
+      hover_nodo <- c(hover_nodo, paste0(nombre_clase_visible, " ", a, ": ", pct_valor, "%"))
+      x_nodo <- c(x_nodo, x_pos)
+      color_nodo <- c(color_nodo, if (clase_interna == "Natural") color_natural else color_antropico)
+    }
+  }
+
+  nodos <- data.table(id = nombres_nodo_id, label = nombres_nodo_label, x = x_nodo, color = color_nodo, hover = hover_nodo)
+  nodos[, idx := .I - 1]
+
+  matriz_larga[, nodo_origen := paste0(clase_ini, "_", anio_ini)]
+  matriz_larga[, nodo_destino := paste0(clase_fin, "_", anio_fin)]
+  matriz_larga <- merge(matriz_larga, nodos[, .(id, idx)], by.x = "nodo_origen", by.y = "id", all.x = TRUE)
+  setnames(matriz_larga, "idx", "source_idx")
+  matriz_larga <- merge(matriz_larga, nodos[, .(id, idx)], by.x = "nodo_destino", by.y = "id", all.x = TRUE)
+  setnames(matriz_larga, "idx", "target_idx")
+  matriz_larga[, color_link := fifelse(clase_ini == "Natural", color_link_natural, color_link_antropico)]
+
+  fig <- plot_ly(
+    type = "sankey", orientation = "h", arrangement = "snap",
+    width = ancho_px, height = alto_px,
+    node = list(label = nodos$label, x = nodos$x, color = nodos$color,
+                pad = 14 * escala, thickness = 20 * escala, line = list(color = "white", width = 0.5 * escala),
+                hovertemplate = paste0(nodos$hover, "<extra></extra>")),
+    link = list(source = matriz_larga$source_idx, target = matriz_larga$target_idx,
+                value = matriz_larga$area_ha, color = matriz_larga$color_link,
+                hovertemplate = paste0("%{source.label} -> %{target.label}<br>Area: %{value:,.0f} ha<extra></extra>")),
+    textfont = list(size = 11 * escala, color = "black")
+  )
+
+  anotaciones <- lapply(seq_along(anios_grafico), function(i) {
+    x_pos <- if (length(anios_grafico) > 1) 0.02 + (i - 1) * (0.96 / (length(anios_grafico) - 1)) else 0.5
+    list(x = x_pos, y = 1.06, xref = "paper", yref = "paper", text = paste0("<b>", anios_grafico[i], "</b>"),
+         showarrow = FALSE, font = list(size = 15 * escala, color = "black"), xanchor = "center")
+  })
+
+  anotacion_leyenda <- list(
+    list(x = 0.5, y = -0.085, xref = "paper", yref = "paper", showarrow = FALSE,
+         text = "<b>Legend</b>", font = list(size = 11 * escala, color = "#555555"), xanchor = "center"),
+    list(x = 0.47, y = -0.115, xref = "paper", yref = "paper", showarrow = FALSE,
+         text = paste0("<span style='color:", color_natural, "'>&#9632;</span> Natural"),
+         font = list(size = 12 * escala, color = "black"), xanchor = "right"),
+    list(x = 0.53, y = -0.115, xref = "paper", yref = "paper", showarrow = FALSE,
+         text = paste0("<span style='color:", color_antropico, "'>&#9632;</span> Anthropic"),
+         font = list(size = 12 * escala, color = "black"), xanchor = "left")
+  )
+
+  forma_marco_leyenda <- list(type = "rect", xref = "paper", yref = "paper",
+                              x0 = 0.35, x1 = 0.65, y0 = -0.15, y1 = -0.035,
+                              line = list(color = "#CCCCCC", width = 0.5 * escala), fillcolor = "white", layer = "below")
+
+  fig <- fig %>% layout(
+    annotations = c(anotaciones, anotacion_leyenda),
+    shapes = list(forma_marco_leyenda),
+    font = list(size = 12 * escala),
+    margin = list(t = 55 * escala, b = 90 * escala, l = 10 * escala, r = 10 * escala),
+    autosize = FALSE
+  )
+
+  # Desactiva el comportamiento "responsive": evita que Plotly vuelva a
+  # redibujar/reanimar el grafico cuando webshot2 ajusta el tamaño de la
+  # ventana del navegador antes de la captura.
+  fig <- fig %>% plotly::config(responsive = FALSE, displayModeBar = FALSE, staticPlot = TRUE)
+
+  return(fig)
+}
+
+exportar_grafico_sankey <- function(fig, nombre_base, max_intentos = 4, matriz_larga = NULL, anios_grafico = NULL) {
+  if (is.null(fig)) return(invisible(NULL))
+
+  dir.create(file.path(dir_graficos, "01_HTML/English"), recursive = TRUE, showWarnings = FALSE)
+  dir.create(file.path(dir_graficos, "02_TIFF_300dpi/English"), recursive = TRUE, showWarnings = FALSE)
+  dir.create(file.path(dir_graficos, "03_PNG/English"), recursive = TRUE, showWarnings = FALSE)
+
+  # --- HTML para pantalla (tamaño comodo, no el de 300dpi) ---
+  # Se arma una version aparte, mas chica, solo para que se vea bien al
+  # abrirla en un navegador normal. El PNG/TIFF NO usan esta version.
+  if (!is.null(matriz_larga) && !is.null(anios_grafico)) {
+    dims_pantalla <- list(ancho_px_logico = 950, alto_px_logico = 560, zoom = 1)
+    fig_pantalla <- construir_figura_sankey(matriz_larga, anios_grafico, dims_pantalla$ancho_px_logico, dims_pantalla$alto_px_logico)
+    archivo_html <- file.path(dir_graficos, "01_HTML/English", paste0(nombre_base, ".html"))
+    saveWidget(fig_pantalla, archivo_html, selfcontained = TRUE)
+  } else {
+    # Respaldo por si no se pasan los datos crudos: usa la version grande igual
+    archivo_html <- file.path(dir_graficos, "01_HTML/English", paste0(nombre_base, ".html"))
+    saveWidget(fig, archivo_html, selfcontained = TRUE)
+  }
+
+  # --- HTML interno (tamaño 300dpi, solo para que webshot2 le saque la foto) ---
+  archivo_html_captura <- file.path(dir_graficos, paste0(".temp_", nombre_base, ".html"))
+  saveWidget(fig, archivo_html_captura, selfcontained = TRUE)
+
+  dims <- calcular_dimensiones_render(17, 10)
+  archivo_png <- file.path(dir_graficos, "03_PNG/English", paste0(nombre_base, ".png"))
+
+  # El color solido del nodo Natural (#3A8F41) es bastante oscuro. Si la
+  # captura salio "lavada", el promedio de brillo de la imagen sale mucho
+  # mas alto de lo esperado. Usamos esto para detectar automaticamente una
+  # mala captura y reintentar, en vez de conformarnos con el primer intento.
+  captura_valida <- FALSE
+
+  for (intento in 1:max_intentos) {
+    tryCatch({
+      webshot2::webshot(archivo_html_captura, file = archivo_png,
+                         vwidth = dims$ancho_px_logico, vheight = dims$alto_px_logico,
+                         zoom = dims$zoom, delay = 3 + intento * 2)
+
+      img <- magick::image_read(archivo_png)
+      info_img <- magick::image_info(img)
+
+      # Recortar solo la franja donde esta el nodo Natural del primer año
+      # (arriba a la izquierda: x=0 a 5%, y=0 a 40% del alto). Si esta franja
+      # sale muy clara, el verde solido no se capturo bien - a diferencia de
+      # medir toda la imagen (que es mayormente fondo blanco y no sirve para
+      # detectar esto).
+      ancho_recorte <- round(info_img$width * 0.05)
+      alto_recorte  <- round(info_img$height * 0.40)
+      img_nodo <- magick::image_crop(img, paste0(ancho_recorte, "x", alto_recorte, "+0+0"))
+
+      brillo_promedio <- magick::image_data(img_nodo, channels = "gray")
+      brillo_promedio <- mean(as.numeric(brillo_promedio))
+
+      # El verde solido (#3A8F41) es oscuro (brillo bajo). Una captura lavada
+      # muestra ese mismo sector mucho mas claro.
+      if (brillo_promedio < 180) {
+        captura_valida <- TRUE
+        break
+      } else {
+        cat("    intento", intento, "- captura salio muy clara (brillo =", round(brillo_promedio,1), "), reintentando...\n")
+      }
+    }, error = function(e) {
+      cat("    intento", intento, "- error:", conditionMessage(e), "\n")
+    })
+  }
+
+  if (!captura_valida) {
+    cat("    ADVERTENCIA: no se logro una captura correcta tras", max_intentos, "intentos para", nombre_base, "- revisar manualmente\n")
+  }
+
+  tryCatch({
+    archivo_tiff <- file.path(dir_graficos, "02_TIFF_300dpi/English", paste0(nombre_base, ".tiff"))
+    img <- magick::image_read(archivo_png)
+    magick::image_write(img, path = archivo_tiff, format = "tiff", density = "300x300")
+    cat("    grafico exportado (HTML+PNG+TIFF):", nombre_base, "\n")
+  }, error = function(e) {
+    cat("    fallo al generar TIFF:", conditionMessage(e), "\n")
+  })
+
+  # Limpieza: el HTML grande solo se usaba internamente para la captura,
+  # no es el que se le muestra a la persona (ese es el chico de arriba)
+  if (file.exists(archivo_html_captura)) file.remove(archivo_html_captura)
+  archivo_captura_files <- file.path(dir_graficos, paste0(".temp_", nombre_base, "_files"))
+  if (dir.exists(archivo_captura_files)) unlink(archivo_captura_files, recursive = TRUE)
+}
+
+
+# ------------------------------------------------------------------------------
+# 04. GENERAR GRAFICOS PARA LAS 4 CATEGORIAS, LEYENDO DEL CACHE
+# ------------------------------------------------------------------------------
+
+anios_serie_completa <- c(2000, 2004, 2008, 2012, 2016, 2020, 2024)
+
+for (etq in etiquetas) {
+
+  cat("\n===", etq, "===\n")
+  nombre_cat_en <- traducir_etiqueta_ingles(etq)
+
+  # --- Serie temporal ---
+  archivo_rds_serie <- file.path(dir_cache, paste0(etq, "_serie_temporal.rds"))
+  if (file.exists(archivo_rds_serie)) {
+    matriz <- readRDS(archivo_rds_serie)
+    dims <- calcular_dimensiones_render(17, 10)
+    fig <- construir_figura_sankey(matriz, anios_serie_completa, dims$ancho_px_logico, dims$alto_px_logico)
+    exportar_grafico_sankey(fig, paste0("Sankey_", nombre_cat_en, "_1-3km_serie_temporal"), matriz_larga = matriz, anios_grafico = anios_serie_completa)
+  } else {
+    cat("  [serie_temporal] no hay cache para", etq, "- correr primero 01_Matrices_Buffer0-1km.R\n")
+  }
+
+  # --- Comparacion extremos ---
+  archivo_rds_comp <- file.path(dir_cache, paste0(etq, "_comparacion_extremos.rds"))
+  if (file.exists(archivo_rds_comp)) {
+    matriz_comp <- readRDS(archivo_rds_comp)
+    dims2 <- calcular_dimensiones_render(17, 10)
+    fig2 <- construir_figura_sankey(matriz_comp, c(2000, 2024), dims2$ancho_px_logico, dims2$alto_px_logico)
+    exportar_grafico_sankey(fig2, paste0("Sankey_", nombre_cat_en, "_1-3km_comparacion_extremos"), matriz_larga = matriz_comp, anios_grafico = c(2000, 2024))
+  } else {
+    cat("  [comparacion_extremos] no hay cache para", etq, "- correr primero 01_Matrices_Buffer0-1km.R\n")
+  }
+}
+
+cat("\n===================== LISTO: GRAFICOS 0-1KM =====================\n")
