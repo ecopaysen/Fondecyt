@@ -1,0 +1,257 @@
+# ==============================================================================
+# MATRICES DE TRANSICION - RANGO 1-3 KM
+# Objetivo 1 - FONDECYT Nº 1251080
+# ==============================================================================
+#
+# QUE HACE ESTE SCRIPT:
+#   1. Toma los rasters de MapBiomas (2000 a 2024, cada 4 años) ya
+#      reclasificados en 3 clases (0=NoData, 1=Natural, 2=Antropico).
+#   2. Define la zona de este rango: la resta geometrica Buffer_3km_clip.shp MENOS Buffer_1km_clip.shp.
+#   3. Extrae, pixel por pixel, la clase de cada año dentro de esa zona,
+#      para las 97 AP juntas (Total Nacional) y por separado para Parque
+#      Nacional, Reserva Nacional y Monumento Natural.
+#   4. Calcula el area real de cada pixel segun su latitud (el raster
+#      esta en grados, no en metros, asi que el area por pixel no es fija).
+#   5. Arma la matriz de transicion cuadrada (3x3, con totales por fila y
+#      columna), en hectareas y en pixeles, con los 6 periodos apilados
+#      en un mismo archivo por categoria.
+#   6. Guarda ademas un cache (.rds) para que el script de graficos pueda
+#      usar estos datos sin tener que volver a procesar el raster.
+#
+# COMO USARLO (para reemplazar por tus propios datos):
+#   - Cambia UNICAMENTE las rutas marcadas con ">>> REEMPLAZAR <<<" en el
+#     Bloque 01 de rutas, mas abajo. No hace falta tocar nada mas del
+#     script para que funcione con otro conjunto de datos que tenga la
+#     misma estructura (mismo esquema de clases 0/1/2, mismo campo
+#     CATEGORIA con valores que contengan las palabras
+#     "parque"/"reserva"/"monumento").
+#   - Corre el script completo, de una sola vez (Ctrl+A, luego Ctrl+Enter
+#     en RStudio). Es la parte mas pesada de todo el proceso: puede tardar
+#     varios minutos porque procesa el raster nacional completo.
+#   - Al terminar, revisa el mensaje final en la consola: confirma en que
+#     carpetas quedaron guardadas las tablas y el cache.
+#
+# REQUISITOS (paquetes de R):
+#   install.packages(c("terra", "sf", "data.table"))
+#
+# ==============================================================================
+
+library(terra)
+library(sf)
+library(data.table)
+
+# Manejo de memoria: evita que terra acumule demasiado en RAM entre
+# categorias (esto causaba error std::bad_alloc).
+terraOptions(memfrac = 0.4, todisk = TRUE)
+
+# ------------------------------------------------------------------------------
+# 01. RUTAS
+# ------------------------------------------------------------------------------
+
+dir_rasters  <- "C:/Users/valen/Desktop/02_Objetivo_1/Data_base_OE01/Raster_test_01_con_ND"   # >>> REEMPLAZAR <<< carpeta con los raster .tif de MapBiomas
+shp_exterior <- "C:/Users/valen/Desktop/Fondecyt/areas_protegidas_totales_actualizadas-20251109T203707Z-1-001/Buffer/Buffer_consecutivos/Buffer_clip/Buffer_clip_modificacion_v6/Buffer_3km_clip.shp"   # >>> REEMPLAZAR <<< shapefile del buffer exterior (el mas grande)
+shp_interior <- "C:/Users/valen/Desktop/Fondecyt/areas_protegidas_totales_actualizadas-20251109T203707Z-1-001/Buffer/Buffer_consecutivos/Buffer_clip/Buffer_clip_modificacion_v6/Buffer_1km_clip.shp"   # >>> REEMPLAZAR <<< shapefile del buffer interior (el que se resta)
+campo_categoria <- "CATEGORIA"   # >>> REEMPLAZAR <<< nombre del campo de categoria en el shapefile
+
+dir_base     <- "C:/Users/valen/Desktop/02_Objetivo_1/Sankey"   # >>> REEMPLAZAR <<< carpeta base donde se guardan todos los resultados
+dir_rango    <- file.path(dir_base, "1-3km")
+
+dir_matriz_base    <- file.path(dir_rango, "CSV_Matriz_transicion")
+dir_serie_ha       <- file.path(dir_matriz_base, "Serie_temporal", "Hectareas")
+dir_serie_px       <- file.path(dir_matriz_base, "Serie_temporal", "Pixeles")
+dir_comparacion_ha <- file.path(dir_matriz_base, "Comparacion_extremos(años)", "Hectareas")
+dir_comparacion_px <- file.path(dir_matriz_base, "Comparacion_extremos(años)", "Pixeles")
+dir_cache          <- file.path(dir_rango, "Cache_Interno_NoTocar")
+
+dir.create(dir_serie_ha, recursive = TRUE, showWarnings = FALSE)
+dir.create(dir_serie_px, recursive = TRUE, showWarnings = FALSE)
+dir.create(dir_comparacion_ha, recursive = TRUE, showWarnings = FALSE)
+dir.create(dir_comparacion_px, recursive = TRUE, showWarnings = FALSE)
+dir.create(dir_cache, recursive = TRUE, showWarnings = FALSE)
+
+anios_serie <- c(2000, 2004, 2008, 2012, 2016, 2020, 2024)
+periodos    <- list(c(2000,2004), c(2004,2008), c(2008,2012), c(2012,2016), c(2016,2020), c(2020,2024))
+
+clases_lulc   <- data.table(codigo = c(0,1,2), clase = c("NoData","Natural","Antropico"))
+clase_excluir <- "NoData"
+radio_tierra_m <- 6371000
+
+
+# ------------------------------------------------------------------------------
+# 02. FUNCIONES
+# ------------------------------------------------------------------------------
+
+archivos_raster <- list.files(dir_rasters, pattern = "\\.tif$", full.names = TRUE, ignore.case = TRUE)
+extraer_anio <- function(nombre) {
+  m <- regmatches(nombre, regexpr("(19|20)[0-9]{2}", nombre))
+  if (length(m) == 0) return(NA_integer_)
+  as.integer(m)
+}
+anios_detectados <- sapply(basename(archivos_raster), extraer_anio)
+names(anios_detectados) <- archivos_raster
+ruta_raster_anio <- function(anio) {
+  ruta <- names(anios_detectados)[anios_detectados == anio]
+  if (length(ruta) != 1) stop("No se encontro raster unico para el año ", anio)
+  ruta
+}
+
+raster_referencia <- rast(ruta_raster_anio(anios_serie[1]))
+res_grados <- res(raster_referencia)
+
+area_ha_analitica <- function(numeros_celda, raster_ref) {
+  lat <- yFromCell(raster_ref, numeros_celda)
+  lat_rad <- lat * pi / 180
+  ancho_m <- res_grados[1] * (pi / 180) * radio_tierra_m * cos(lat_rad)
+  alto_m  <- res_grados[2] * (pi / 180) * radio_tierra_m
+  (ancho_m * alto_m) / 10000
+}
+
+clasificar_categoria <- function(valores) {
+  out <- rep(NA_character_, length(valores))
+  out[grepl("parque",    valores, ignore.case = TRUE)] <- "Parque Nacional"
+  out[grepl("reserva",   valores, ignore.case = TRUE)] <- "Reserva Nacional"
+  out[grepl("monumento", valores, ignore.case = TRUE)] <- "Monumento Natural"
+  out
+}
+
+calcular_matriz_periodo <- function(poligonos, etiqueta, anio_ini, anio_fin) {
+  n_poly <- nrow(as.data.frame(poligonos))
+  if (n_poly == 0) return(NULL)
+  r_ini <- rast(ruta_raster_anio(anio_ini)); names(r_ini) <- "clase_ini"
+  r_fin <- rast(ruta_raster_anio(anio_fin)); names(r_fin) <- "clase_fin"
+  stack_periodo <- c(r_ini, r_fin)
+  valores_extraidos <- terra::extract(stack_periodo, poligonos, cells = TRUE, ID = FALSE)
+  valores <- as.data.table(valores_extraidos)
+  valores <- valores[!is.na(clase_ini) & !is.na(clase_fin)]
+  if (nrow(valores) == 0) return(NULL)
+  valores[, area_ha := area_ha_analitica(cell, r_ini)]
+  matriz <- valores[, .(n_pixeles = .N, area_ha = sum(area_ha)), by = .(codigo_ini = clase_ini, codigo_fin = clase_fin)]
+  matriz <- merge(matriz, clases_lulc, by.x = "codigo_ini", by.y = "codigo", all.x = TRUE)
+  setnames(matriz, "clase", "clase_ini")
+  matriz <- merge(matriz, clases_lulc, by.x = "codigo_fin", by.y = "codigo", all.x = TRUE)
+  setnames(matriz, "clase", "clase_fin")
+  matriz[, `:=`(anio_ini = anio_ini, anio_fin = anio_fin, periodo = paste0(anio_ini,"-",anio_fin), categoria = etiqueta)]
+  return(matriz)
+}
+
+# Convierte el formato largo a matriz cuadrada 3x3 (NoData/Natural/Antropico)
+# CON TOTALES MARGINALES, en dos unidades (ha y pixeles). Todos los periodos
+# quedan apilados en un unico archivo por categoria.
+guardar_matriz_cuadrada <- function(matriz_completa, etiqueta, tipo_calculo, dir_ha, dir_px) {
+
+  clases_orden <- c("NoData", "Natural", "Antropico")
+  periodos_unicos <- unique(matriz_completa$periodo)
+
+  construir_tabla_periodo <- function(sub, anio_ini_p, anio_fin_p, campo_valor) {
+    obtener_valor <- function(fila, columna) {
+      v <- sub[clase_ini == fila & clase_fin == columna, get(campo_valor)]
+      if (length(v) == 0) 0 else v
+    }
+    m <- matrix(0, nrow = 3, ncol = 3, dimnames = list(clases_orden, clases_orden))
+    for (fi in clases_orden) for (fj in clases_orden) m[fi, fj] <- obtener_valor(fi, fj)
+    totales_fila    <- rowSums(m)
+    totales_columna <- colSums(m)
+    total_general   <- sum(m)
+    tabla <- data.table(Clase = c(paste0("Año ", anio_fin_p, " ->"), clases_orden, paste0("Total ", anio_ini_p)))
+    for (col in clases_orden) tabla[[col]] <- c(col, round(m[, col], 2), round(totales_columna[col], 2))
+    tabla[["Total"]] <- c(paste0("Total ", anio_fin_p), round(totales_fila, 2), round(total_general, 2))
+    return(tabla)
+  }
+
+  construir_archivo_apilado <- function(campo_valor) {
+    bloques <- list()
+    for (p in periodos_unicos) {
+      sub <- matriz_completa[periodo == p]
+      anio_ini_p <- unique(sub$anio_ini)
+      anio_fin_p <- unique(sub$anio_fin)
+      titulo <- data.table(Clase = paste0("Periodo ", p), NoData = "", Natural = "", Antropico = "", Total = "")
+      tabla_periodo <- construir_tabla_periodo(sub, anio_ini_p, anio_fin_p, campo_valor)
+      fila_vacia <- data.table(Clase = "", NoData = "", Natural = "", Antropico = "", Total = "")
+      tabla_periodo_txt <- tabla_periodo[, lapply(.SD, as.character)]
+      bloques[[p]] <- rbind(titulo, tabla_periodo_txt, fila_vacia)
+    }
+    rbindlist(bloques)
+  }
+
+  tabla_ha_completa <- construir_archivo_apilado("area_ha")
+  archivo_ha <- file.path(dir_ha, paste0("Matriz_Transicion_", gsub(" ","_",etiqueta), "_", tipo_calculo, "_ha.csv"))
+  fwrite(tabla_ha_completa, archivo_ha)
+
+  tabla_px_completa <- construir_archivo_apilado("n_pixeles")
+  archivo_px <- file.path(dir_px, paste0("Matriz_Transicion_", gsub(" ","_",etiqueta), "_", tipo_calculo, "_pixeles.csv"))
+  fwrite(tabla_px_completa, archivo_px)
+
+  cat("    matriz cuadrada apilada (3x3, con NoData, ha + pixeles):", length(periodos_unicos), "periodo(s) en 1 archivo\n")
+}
+
+# TIPO 1: serie temporal, 6 periodos
+calcular_serie_temporal <- function(poligonos, etiqueta) {
+  cat("  serie_temporal_2000_2024 -", etiqueta, "\n")
+  lista_periodos <- list()
+  for (p in periodos) {
+    m <- calcular_matriz_periodo(poligonos, etiqueta, p[1], p[2])
+    if (!is.null(m)) lista_periodos[[paste0(p[1],"-",p[2])]] <- m
+  }
+  if (length(lista_periodos) == 0) { cat("    sin datos, se omite\n"); return(invisible(NULL)) }
+  matriz_completa <- rbindlist(lista_periodos)
+  guardar_matriz_cuadrada(matriz_completa, etiqueta, "serie_temporal_2000_2024", dir_serie_ha, dir_serie_px)
+  saveRDS(matriz_completa, file.path(dir_cache, paste0(gsub(" ","_",etiqueta), "_serie_temporal.rds")))
+}
+
+# TIPO 2: comparacion extremos, 2000 vs 2024
+calcular_comparacion_extremos <- function(poligonos, etiqueta) {
+  cat("  comparacion_extremos_2000_2024 -", etiqueta, "\n")
+  m <- calcular_matriz_periodo(poligonos, etiqueta, 2000, 2024)
+  if (is.null(m)) { cat("    sin datos, se omite\n"); return(invisible(NULL)) }
+  guardar_matriz_cuadrada(m, etiqueta, "comparacion_extremos_2000_2024", dir_comparacion_ha, dir_comparacion_px)
+  saveRDS(m, file.path(dir_cache, paste0(gsub(" ","_",etiqueta), "_comparacion_extremos.rds")))
+}
+
+
+# ------------------------------------------------------------------------------
+# 03. ZONA (resta geometrica: Buffer_3km MENOS Buffer_1km)
+# ------------------------------------------------------------------------------
+
+zona_ext <- vect(shp_exterior)
+zona_int <- vect(shp_interior)
+if (crs(zona_ext) != crs(raster_referencia)) zona_ext <- project(zona_ext, crs(raster_referencia))
+if (crs(zona_int) != crs(raster_referencia)) zona_int <- project(zona_int, crs(raster_referencia))
+
+zona <- erase(zona_ext, zona_int)
+zona$CATEGORIA_GRUPO <- clasificar_categoria(as.data.frame(zona)[[campo_categoria]])
+
+cat("Zona: BUFFER 1-3km (Buffer_3km MENOS Buffer_1km)\n")
+cat("Poligonos por categoria:\n")
+print(table(zona$CATEGORIA_GRUPO, useNA = "ifany"))
+
+
+# ------------------------------------------------------------------------------
+# 04. EJECUTAR: TOTAL NACIONAL + 3 CATEGORIAS x 2 TIPOS DE CALCULO
+# ------------------------------------------------------------------------------
+
+cat("\n=== Total_Nacional ===\n")
+calcular_serie_temporal(zona, "Total_Nacional")
+calcular_comparacion_extremos(zona, "Total_Nacional")
+gc()
+tmpFiles(remove = TRUE)
+
+categorias_objetivo <- c("Parque Nacional", "Reserva Nacional", "Monumento Natural")
+for (cat_actual in categorias_objetivo) {
+  cat("\n===", cat_actual, "===\n")
+  subset_zona <- zona[zona$CATEGORIA_GRUPO == cat_actual, ]
+  etiqueta <- gsub(" ", "_", cat_actual)
+  calcular_serie_temporal(subset_zona, etiqueta)
+  calcular_comparacion_extremos(subset_zona, etiqueta)
+
+  rm(subset_zona)
+  gc()
+  tmpFiles(remove = TRUE)
+}
+
+cat("\n===================== LISTO: RANGO 1-3KM =====================\n")
+cat("Matrices - serie temporal (ha):", dir_serie_ha, "\n")
+cat("Matrices - serie temporal (pixeles):", dir_serie_px, "\n")
+cat("Matrices - comparacion extremos (ha):", dir_comparacion_ha, "\n")
+cat("Matrices - comparacion extremos (pixeles):", dir_comparacion_px, "\n")
+cat("Cache para graficos:", dir_cache, "\n")
+cat("================================================================\n")
